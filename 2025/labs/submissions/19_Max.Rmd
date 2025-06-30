@@ -1,0 +1,203 @@
+---
+title: "Clustering (not my submission for prediction)"
+author: "Maximilian J. Gebauer"
+date: "2025-06-28"
+output: html_document
+---
+
+```{r Setup, include=FALSE, results='hide', warning=FALSE}
+knitr::opts_chunk$set(echo = T, fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3) 
+
+if(!require("pacman")) install.packages("pacman")
+
+pacman::p_load(tidyverse, dplyr, ggthemes, data.table, lubridate, glmnet,
+               GGally, RColorBrewer, ggsci, plotROC, usmap,
+               plotly, ggpubr, vistime, coefplot, skimr, car, ggrepel, slider, lubridate,
+               tidymodels,ranger,vip,ggplot2, tune,dials,pdp, purrr, stringr, lmtest,
+               sandwich, xgboost, future.apply, mclust, ggdendro, flexclust, factoextra, cluster)
+```
+
+Did some EDA, played around with K-means, hierarchical, and GMM approaches to clustering. I ended up employing a GMM where I selected k=3 based on both AIC and BIC metrics converging on this value. I then performed softmax hard classification on the data and visualized how the clusters' members were distributed along various feature dimensions.
+
+```{r}
+data <- read.csv("/Users/maximiliangebauer/Documents/summer-lab/2025/labs/data/19_spotify-train.csv")
+```
+
+```{r}
+head(data)
+skim(data)
+```
+
+```{r}
+library(ggplot2)
+library(scales)
+
+ggplot(data, aes(x = factor(Added.by), fill = Explicit)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Proportion of Submissions Labeled Explicit by Contributor",
+    x = "Added by",
+    y = "Proportion",
+    fill = "Explicit"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45)
+  )
+```
+```{r}
+data_summary <- data %>%
+  group_by(Added.by, Added.At) %>%
+  summarise(submissions = n(), .groups = "drop")
+
+# 2) Compute cumulative submissions per person over time
+data_cumsum <- data_summary %>%
+  arrange(Added.by, Added.At) %>%    # within each person, sort by time
+  group_by(Added.by) %>%
+  mutate(cum_submissions = cumsum(submissions)) %>%
+  ungroup()
+
+# 3) Plot as a time‐series of running totals
+ggplot(data_cumsum, aes(x = Added.At, 
+                        y = cum_submissions, 
+                        color = factor(Added.by), 
+                        group = factor(Added.by))) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    x     = "Time",
+    y     = "Cumulative submissions",
+    color = "Submitted by"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+nums <- unlist(lapply(data, is.numeric), use.names = FALSE)
+
+numeric_data <- data[, nums]
+
+numeric_data <- numeric_data %>%
+  select(-c(Popularity,Key,Mode,Tempo,Time.Signature))
+
+stan_data <- as.data.frame(scale(numeric_data))
+```
+
+
+```{r}
+wss <- map_dbl(1:15, function(k) {
+  kmeans(stan_data, centers = k, nstart = 25)$tot.withinss
+})
+
+# 2) Build a data frame for plotting
+elbow_df <- data.frame(
+  k   = 1:15,
+  wss = wss
+)
+
+# 3) Plot the “elbow”
+ggplot(elbow_df, aes(x = k, y = wss)) +
+  geom_line() +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 1:15) +
+  labs(
+    title = "Elbow Plot for K-Means Clustering",
+    x     = "Number of clusters (K)",
+    y     = "Total within-cluster SSE"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+dist_mat <- dist(stan_data)                          
+hc       <- hclust(dist_mat, method = "ward.D2")    
+
+# 2) Convert to dendrogram and extract for ggplot
+library(ggdendro)
+dend      <- as.dendrogram(hc)
+dend_data <- dendro_data(dend, type = "rectangle")
+
+# 3) Plot with ggplot2
+library(ggplot2)
+
+ggplot() +
+  geom_segment(data = segment(dend_data),
+               aes(x    = x,    y    = y,
+                   xend = xend, yend = yend)) +
+  geom_text(data = label(dend_data),
+            aes(x = x, y = y, label = label),
+            hjust = 1, angle = 90, size = 2.5) +
+  labs(title = "Hierarchical Clustering Dendrogram",
+       x     = NULL,
+       y     = "Height") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+```{r}
+bic_vals <- mclustBIC(stan_data, G = 1:15)
+
+best_mod <- Mclust(stan_data, x = bic_vals)
+
+print(best_mod)
+
+aic_vals <- sapply(1:15, function(g) {
+  m <- Mclust(stan_data, G = g, verbose = FALSE)
+  AIC(m)
+})
+aic_df <- data.frame(G = 1:15, AIC = aic_vals)
+ggplot(aic_df, aes(G, AIC)) +
+  geom_line() + geom_point() +
+  labs(title = "GMM model selection via AIC",
+       x = "Number of components (G)",
+       y = "AIC") +
+  theme_minimal()
+```
+
+```{r}
+data$cluster <- best_mod$classification
+```
+
+```{r}
+ggplot(data, aes(x = factor(Added.by), fill = factor(cluster))) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Proportion of Submissions in Clusters by Contributor",
+    x = "Added by",
+    y = "Proportion",
+    fill = "Cluster"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45)
+  )
+```
+
+```{r}
+data %>%
+  group_by(cluster) %>%
+  summarise(
+    Mean_duration_seconds = mean(Duration..ms./1000),
+    Mean_danceability = mean(Danceability),
+    Mean_energy = mean(Energy),
+    Mean_loudness = mean(Loudness),
+    Mean_
+  ) %>%
+  ungroup()
+```
+
+```{r}
+ggplot(data,aes(x=Speechiness, y = Instrumentalness, group = factor(cluster), color = factor(cluster))) +
+  geom_point(alpha=0.5) +
+  theme_minimal()
+```
+
+Cluster 1 membership is overwhelmingly determined by having non-zero Instrumentalness, with the other two clusters' members taking 0 or near 0 for this metric. Cluster 2 versus 3 membership appears to primarily be determined by the Speechiness metric, with cluster 2's members tending towards higher values than either Cluster 1 or 3.
+
+
+

@@ -1,0 +1,549 @@
+---
+title: "xgboost WP Model"
+author: "Maximilian J. Gebauer"
+date: "2025-06-26"
+output: html_document
+---
+
+```{r Setup, include=FALSE, results='hide', warning=FALSE}
+knitr::opts_chunk$set(echo = T, fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3) 
+
+if(!require("pacman")) install.packages("pacman")
+
+pacman::p_load(tidyverse, dplyr, ggthemes, data.table, lubridate, glmnet,
+               GGally, RColorBrewer, ggsci, plotROC, usmap,
+               plotly, ggpubr, vistime, coefplot, skimr, car, ggrepel, slider, lubridate,
+               tidymodels,ranger,vip,ggplot2, tune,dials,pdp, purrr, stringr, lmtest,
+               sandwich, xgboost, future.apply)
+```
+
+```{r}
+nfl <- data.table::fread("/Users/maximiliangebauer/Documents/summer-lab/2025/labs/data/18_nfl-wp.csv")
+```
+
+```{r}
+sub_nfl <- nfl %>%
+  select(game_id, label_win,score_differential,game_seconds_remaining,posteam_spread,posteam_timeouts_remaining,defteam_timeouts_remaining,yardline_100,down,ydstogo)
+```
+
+```{r}
+head(sub_nfl)
+```
+
+```{r}
+library(tidymodels)  
+library(finetune)     
+library(Matrix)      
+library(xgboost)
+library(data.table)
+library(future)       
+
+sub_nfl <- sub_nfl %>%
+  mutate(down = factor(down, levels = 1:4))
+
+formula_x <- ~ score_differential + game_seconds_remaining +
+              posteam_spread + posteam_timeouts_remaining +
+              defteam_timeouts_remaining + yardline_100 +
+              ydstogo + down          
+
+X <- sparse.model.matrix(formula_x, sub_nfl)[ , -1]   
+y <- sub_nfl$label_win
+
+dtrain <- data.frame(
+  game_id   = sub_nfl$game_id,          
+  Matrix::as.matrix(X),                 
+  label_win = factor(y, levels = 0:1)   
+)
+
+xgb_rec <- recipe(label_win ~ ., data = dtrain) %>%
+  update_role(game_id, new_role = "group_var")  
+
+xgb_spec <- boost_tree(
+  trees              = tune(),
+  tree_depth         = tune(),
+  min_n              = tune(),
+  learn_rate         = tune(),
+  loss_reduction     = tune(),          
+  sample_size        = tune(),        
+  mtry               = tune()   
+) %>%
+  set_engine("xgboost",
+             objective   = "binary:logistic",
+             eval_metric = "logloss",
+             nthread     = parallel::detectCores()) %>%
+  set_mode("classification")
+
+wf <- workflow() %>%
+  add_recipe(xgb_rec) %>%
+  add_model(xgb_spec)
+
+xgb_param <- parameters(wf) %>%
+  update(
+    trees          = trees(c(300, 2500)),
+    tree_depth     = tree_depth(c(3L, 10L)),
+    min_n          = min_n(c(2L, 30L)),
+    learn_rate     = learn_rate(c(1e-3, 0.3)),
+    loss_reduction = loss_reduction(c(-6, 1)),  
+    sample_size    = sample_prop(c(0.5, 1.0)),
+    mtry           = finalize(mtry(), dtrain) 
+  )
+
+set.seed(18)
+grid <- grid_latin_hypercube(xgb_param, size = 60)
+
+cv_folds <- group_vfold_cv(dtrain,
+                           group  = game_id,
+                           v      = 5)
+
+plan(multisession, workers = parallel::detectCores())  
+
+race_res <- tune_race_anova(
+  wf,
+  resamples = cv_folds,
+  grid      = grid,
+  control   = control_race(verbose_elim = TRUE,
+                           verbose      = TRUE,
+                           save_pred    = TRUE),
+  metrics   = metric_set(mn_log_loss) 
+)
+
+plan(sequential)
+```
+
+
+```{r}
+best_cfg <- select_best(race_res)
+
+final_wf <- finalize_workflow(wf, best_cfg)
+
+final_fit <- fit(final_wf, data = dtrain)
+
+vip::vip(extract_fit_parsnip(final_fit))
+```
+
+```{r}
+xgb_model     <- extract_fit_parsnip(final_fit)$fit
+feature_names <- names(X)
+
+predict_wp <- function(df_new) {
+  df_new      <- as.data.frame(df_new)
+  df_new$down <- factor(df_new$down, levels = 1:4)
+
+  skel        <- df_new[1, , drop = FALSE]
+  skel$down   <- factor(2, levels = 1:4)
+  df_pad      <- rbind(df_new, skel)
+
+  Xnew <- sparse.model.matrix(formula_x, df_pad)[ , -1, drop = FALSE]
+  Xnew <- Xnew[-nrow(Xnew), , drop = FALSE]
+
+  missing <- setdiff(feature_names, colnames(Xnew))
+  if (length(missing)) {
+    Xnew <- cbind(
+      Xnew,
+      Matrix::Matrix(
+        0,
+        nrow     = nrow(Xnew),
+        ncol     = length(missing),
+        sparse   = TRUE,
+        dimnames = list(NULL, missing)
+      )
+    )
+  }
+
+  extra <- setdiff(colnames(Xnew), feature_names)
+  if (length(extra)) {
+    keep <- setdiff(colnames(Xnew), extra)
+    Xnew <- Xnew[ , keep, drop = FALSE]
+  }
+  Xnew <- Xnew[ , feature_names, drop = FALSE]
+
+  Xmat <- as.matrix(Xnew)
+
+  preds <- predict(xgb_model, Xmat)
+
+  as.numeric(preds)
+}
+
+vip::vip(extract_fit_parsnip(final_fit))
+```
+
+```{r}
+predict_wp <- function(df_new) {
+  df_new <- as.data.frame(df_new)
+  
+  df_new$game_id <- NA_character_
+  
+  df_new$down <- factor(df_new$down, levels = 1:4)
+  
+  df_new$down2 <- as.integer(df_new$down == "2")
+  df_new$down3 <- as.integer(df_new$down == "3")
+  df_new$down4 <- as.integer(df_new$down == "4")
+  
+  df_new$down <- NULL
+  
+  probs <- predict(final_fit, new_data = df_new, type = "prob")
+  
+  probs$.pred_1
+}
+
+toy <- data.frame(
+  yardline_100               = 50,
+  score_differential         = 0,
+  game_seconds_remaining     = 900,
+  posteam_spread             = 0,
+  posteam_timeouts_remaining = 3,
+  defteam_timeouts_remaining = 3,
+  ydstogo                    = 10,
+  down                       = 1  
+)
+
+print(predict_wp(toy))
+```
+
+```{r}
+library(data.table); library(Matrix);   library(xgboost)
+library(ggplot2);  library(scales);     library(viridisLite)
+
+yl_vals   <- c(10, 20, 70, 90)        
+score_vals<- c(-7, -3, 0, 3, 7)
+clock_vals<- c(150, 900, 1800, 2700)
+spread_vals <- c(-7, -3, 0, 3, 7)
+
+scen_a <- CJ(
+  yardline_100           = yl_vals,
+  score_differential     = score_vals,
+  game_seconds_remaining = clock_vals
+)
+scen_a[, `:=`(
+  posteam_spread               = 0,
+  posteam_timeouts_remaining   = 3,
+  defteam_timeouts_remaining   = 3,
+  ydstogo                      = 10,
+  down                         = factor(1, levels = 1:4)
+)]
+scen_a[, wp := predict_wp(.SD)]
+
+p_a <- ggplot(scen_a,
+              aes(game_seconds_remaining/60, wp,
+                  colour = factor(score_differential),
+                  group  = factor(score_differential))) +
+  geom_line(linewidth = .9) +
+  facet_wrap(~ yardline_100,
+             labeller = labeller(yardline_100 = function(x) paste0("YL ", x))) +
+  scale_colour_brewer(palette = "RdBu", name = "Score diff") +
+  scale_x_reverse(breaks = seq(0, 45, 5)) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "WP vs minutes remaining • coloured by score diff\nfaceted by yard-line",
+       x     = "Minutes remaining",
+       y     = "Win probability") +
+  theme_minimal()
+
+
+score_grid <- seq(-24, 24, by = 3)
+time_grid  <- seq(60, 2700, by = 120)
+
+scen_b <- CJ(
+  yardline_100           = yl_vals,
+  score_differential     = score_grid,
+  game_seconds_remaining = time_grid
+)
+scen_b[, `:=`(
+  posteam_spread               = 0,
+  posteam_timeouts_remaining   = 3,
+  defteam_timeouts_remaining   = 3,
+  ydstogo                      = 10,
+  down                         = factor(1, levels = 1:4)
+)]
+scen_b[, wp := predict_wp(.SD)]
+
+p_b <- ggplot(scen_b,
+              aes(score_differential, game_seconds_remaining/60, fill = wp)) +
+  geom_tile() +
+  facet_wrap(~ yardline_100,
+             labeller = labeller(yardline_100 = function(x) paste0("YL ", x))) +
+  scale_fill_viridis_c(option = "C", labels = percent_format(), name = "WP") +
+  scale_y_reverse(expand = c(0,0)) +
+  labs(title = "Heat-map: score diff × minutes remaining (faceted by yard-line)",
+       x = "Score differential (pos – opp)", y = "Minutes remaining") +
+  theme_minimal()
+
+
+scen_c <- CJ(
+  yardline_100           = yl_vals,
+  posteam_spread         = spread_vals,
+  game_seconds_remaining = clock_vals
+)
+scen_c[, `:=`(
+  score_differential            = 0,
+  posteam_timeouts_remaining    = 3,
+  defteam_timeouts_remaining    = 3,
+  ydstogo                       = 10,
+  down                          = factor(1, levels = 1:4)
+)]
+scen_c[, wp := predict_wp(.SD)]
+
+p_c <- ggplot(scen_c,
+              aes(game_seconds_remaining/60, wp,
+                  colour = factor(posteam_spread),
+                  group  = factor(posteam_spread))) +
+  geom_line(linewidth = .9) +
+  facet_wrap(~ yardline_100,
+             labeller = labeller(yardline_100 = function(x) paste0("YL ", x))) +
+  scale_colour_brewer(palette = "PuOr", name = "Point spread") +
+  scale_x_reverse(breaks = seq(0, 45, 5)) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "WP vs minutes remaining • coloured by point spread\nfaceted by yard-line",
+       x = "Minutes remaining", y = "Win probability") +
+  theme_minimal()
+
+
+print(p_a)
+print(p_b)
+print(p_c)
+```
+
+```{r}
+library(data.table)
+library(dplyr)
+library(Matrix)
+library(xgboost)
+library(purrr)
+library(ggplot2)
+library(scales)
+
+xgb_model <- extract_fit_parsnip(final_fit)$fit
+params    <- list(
+  eta              = best_cfg$learn_rate,
+  max_depth        = best_cfg$tree_depth,
+  min_child_weight = best_cfg$min_n,
+  gamma            = best_cfg$loss_reduction,
+  subsample        = best_cfg$sample_size,
+  colsample_bytree = best_cfg$mtry/ncol(X),
+  objective        = "binary:logistic",
+  eval_metric      = "logloss"
+)
+nrounds       <- best_cfg$trees
+formula_x     <- formula_x           
+feature_names <- colnames(X)          
+
+pad_to_train <- function(Xnew, feature_names) {
+
+  Xnew <- as(Xnew, "dgCMatrix")
+  
+
+  miss <- setdiff(feature_names, colnames(Xnew))
+  if (length(miss)) {
+    Xnew <- cbind(
+      Xnew,
+      Matrix(0,
+             nrow     = nrow(Xnew),
+             ncol     = length(miss),
+             sparse   = TRUE,
+             dimnames = list(NULL, miss))
+    )
+  }
+
+  extra <- setdiff(colnames(Xnew), feature_names)
+  if (length(extra)) {
+    Xnew <- Xnew[, setdiff(colnames(Xnew), extra), drop = FALSE]
+  }
+  
+  Xnew[, feature_names, drop = FALSE]
+}
+
+
+
+one_boot <- function(b) {
+  # 1) sample games & rebuild train set
+  games_boot <- sample(unique(sub_nfl$game_id),
+                       length(unique(sub_nfl$game_id)),
+                       replace = TRUE)
+  train_b <- sub_nfl %>%
+    filter(game_id %in% games_boot) %>%
+    mutate(down = factor(down, levels = 1:4))
+  
+  # 2) build & pad train matrix, fit xgboost
+  Xb     <- sparse.model.matrix(formula_x, train_b)[, -1, drop = FALSE]
+  Xb     <- pad_to_train(Xb, feature_names)
+  yb     <- as.numeric(as.character(train_b$label_win))
+  dtrain <- xgb.DMatrix(data = as.matrix(Xb), label = yb)
+  model_b <- xgb.train(params  = params,
+                       data    = dtrain,
+                       nrounds = nrounds,
+                       verbose = 0)
+
+  # 3) build & pad scenario matrix once per replicate
+  Xs    <- sparse.model.matrix(formula_x, scen_a)[, -1, drop = FALSE]
+  Xs    <- pad_to_train(Xs, feature_names)
+  preds <- predict(model_b, as.matrix(Xs))
+
+  # 4) return *all* scenario columns + replicate + wp
+  tibble(
+    yardline_100             = scen_a$yardline_100,
+    score_differential       = scen_a$score_differential,
+    game_seconds_remaining   = scen_a$game_seconds_remaining,
+    posteam_spread           = scen_a$posteam_spread,
+    posteam_timeouts_remaining = scen_a$posteam_timeouts_remaining,
+    defteam_timeouts_remaining = scen_a$defteam_timeouts_remaining,
+    ydstogo                  = scen_a$ydstogo,
+    down                     = scen_a$down,
+    replicate                = b,
+    wp                       = preds
+  )
+}
+
+set.seed(19)
+B      <- 100
+boot_a <- map_dfr(1:B, one_boot)
+```
+
+```{r}
+ci_a <- boot_a %>%
+  group_by(yardline_100, score_differential, game_seconds_remaining) %>%
+  summarize(
+    wp_mean = mean(wp),
+    wp_low  = quantile(wp, 0.025),
+    wp_high = quantile(wp, 0.975),
+    .groups = "drop"
+  )
+
+p_a_ci <- ggplot(ci_a,
+                 aes(x = game_seconds_remaining/60,
+                     y = wp_mean,
+                     color = factor(score_differential),
+                     fill  = factor(score_differential),
+                     group = factor(score_differential))) +
+  geom_ribbon(aes(ymin = wp_low, ymax = wp_high),
+              alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  facet_wrap(~ yardline_100,
+             labeller = labeller(yardline_100 = function(x) paste0("YL ", x))) +
+  scale_color_brewer("Score diff", palette = "RdBu") +
+  scale_fill_brewer("Score diff", palette = "RdBu") +
+  scale_x_reverse(breaks = seq(0, 45, 5)) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "WP vs minutes remaining • 95% block-bootstrap CIs",
+    x     = "Minutes remaining",
+    y     = "Win probability"
+  ) +
+  theme_minimal()
+
+print(p_a_ci)
+```
+```{r}
+xgb_model   <- extract_fit_parsnip(final_fit)$fit
+params      <- list(
+  eta              = best_cfg$learn_rate,
+  max_depth        = best_cfg$tree_depth,
+  min_child_weight = best_cfg$min_n,
+  gamma            = best_cfg$loss_reduction,
+  subsample        = best_cfg$sample_size,
+  colsample_bytree = best_cfg$mtry/ncol(X),
+  objective        = "binary:logistic",
+  eval_metric      = "logloss"
+)
+nrounds     <- best_cfg$trees
+formula_x   <- formula_x           
+feature_names <- colnames(X)          
+B           <- 100                    
+set.seed(2025)
+
+library(dplyr)
+library(tibble)
+library(Matrix)
+library(xgboost)
+library(purrr)
+
+pad_to_train <- function(Xnew, feature_names) {
+  Xnew <- as(Xnew, "dgCMatrix")
+  miss <- setdiff(feature_names, colnames(Xnew))
+  if (length(miss)) {
+    Xnew <- cbind(
+      Xnew,
+      Matrix(0,
+             nrow     = nrow(Xnew),
+             ncol     = length(miss),
+             sparse   = TRUE,
+             dimnames = list(NULL, miss))
+    )
+  }
+  extra <- setdiff(colnames(Xnew), feature_names)
+  if (length(extra)) {
+    Xnew <- Xnew[, setdiff(colnames(Xnew), extra), drop = FALSE]
+  }
+  Xnew[, feature_names, drop = FALSE]
+}
+
+sub_nfl_with_id <- sub_nfl %>%
+  mutate(
+    play_id = row_number(),
+    down    = factor(down, levels = 1:4)
+  )
+
+one_boot_full <- function(b) {
+  games_boot <- sample(unique(sub_nfl_with_id$game_id),
+                       length(unique(sub_nfl_with_id$game_id)),
+                       replace = TRUE)
+  train_b <- sub_nfl_with_id %>%
+    filter(game_id %in% games_boot)
+
+  Xb <- sparse.model.matrix(formula_x, train_b)[, -1, drop = FALSE]
+  Xb <- pad_to_train(Xb, feature_names)
+  yb <- as.numeric(as.character(train_b$label_win))
+
+  dtrain_b <- xgb.DMatrix(data = as.matrix(Xb), label = yb)
+  model_b  <- xgb.train(params  = params,
+                        data    = dtrain_b,
+                        nrounds = nrounds,
+                        verbose = 0)
+
+  Xf <- sparse.model.matrix(formula_x, sub_nfl_with_id)[, -1, drop = FALSE]
+  Xf <- pad_to_train(Xf, feature_names)
+  preds <- predict(model_b, as.matrix(Xf))
+
+  tibble(
+    play_id  = sub_nfl_with_id$play_id,
+    replicate = b,
+    wp        = preds
+  )
+}
+
+boot_full <- map_dfr(1:B, one_boot_full)
+
+glimpse(boot_full)
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+ci_full <- boot_full %>%
+  group_by(play_id) %>%
+  summarise(
+    wp_mean = mean(wp),
+    wp_low  = quantile(wp, 0.025),
+    wp_high = quantile(wp, 0.975),
+    .groups = "drop"
+  )
+
+plot_df <- sub_nfl_with_id %>%
+  left_join(ci_full, by = "play_id")
+
+ggplot(plot_df, aes(x = play_id, y = wp_mean)) +
+  geom_ribbon(aes(ymin = wp_low, ymax = wp_high),
+              fill  = "steelblue", alpha = 0.3) +
+  geom_line(color = "steelblue", size = 0.6) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Win Probability with 95% Bootstrap CIs per Play",
+    x     = "Play Index",
+    y     = "Win Probability"
+  ) +
+  theme_minimal()
+```
+
+

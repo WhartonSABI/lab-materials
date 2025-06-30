@@ -1,0 +1,174 @@
+---
+title: "19_adam"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-06-30"
+---
+
+```{r setup, include=FALSE}
+#############
+### SETUP ###
+#############
+
+library(cluster)      # for hierarchical clustering and silhouette analysis
+library(factoextra)   # for clustering visualization and elbow method
+library(flexclust)    # for k-means clustering
+library(ggdendro)     # for dendrogram visualization
+library(ggplot2)      # for plotting
+library(mclust)       # for Gaussian Mixture Models
+library(tidyverse)    # for data manipulation and visualization
+library(dplyr)         
+library(tidyr)
+
+# set seed
+set.seed(19)
+
+####################
+### SPOTIFY DATA ###
+####################
+
+# read in data
+spotify_data = read_csv("../data/19_spotify-train.csv")
+
+# preview data
+head(spotify_data)
+```
+here we have a lovely lil bar plot of all genres>3 count
+```{r, echo = FALSE}
+# Step 1: Separate multiple genres into individual rows
+genre_counts <- spotify_data %>%
+  separate_rows(Genre, sep = ";") %>%       # splits on ";"
+  mutate(Genre = str_trim(Genre)) %>%       # removes leading/trailing spaces
+  count(Genre, sort = TRUE) %>% 
+  filter(n>3)
+
+# Step 2: Plot the genre counts
+
+
+ggplot(genre_counts, aes(x = reorder(Genre, -n), y = n)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  labs(title = "Number of Songs by Genre (n>3)",
+       x = "Genre", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+lets ermmmm do a lil correlation heatmap. also standardized data in here
+
+```{r, echo = FALSE}
+library(ggcorrplot)
+
+# Drop non-numeric columns (like Song Name, Artist, etc.)
+spotify_numeric <- spotify_data %>%
+  select(where(is.numeric))
+
+# (Optional) Standardize the data
+spotify_scaled <- scale(spotify_numeric)
+
+cor_matrix <- cor(spotify_scaled)
+
+ggcorrplot(cor_matrix, 
+           type = "lower", 
+           lab = TRUE, 
+           title = "Correlation Heatmap of Song Features")
+
+
+#gotta add back artist and track
+# Convert scaled matrix back to a data frame
+scaled_df <- as.data.frame(spotify_scaled)
+
+# Add back the track and artist columns
+scaled_df$track <- spotify_data$track
+scaled_df$`Artist Name(s)` <- spotify_data$`Artist Name(s)`
+
+# Optional: Reorder so track and artist come first
+scaled_df <- scaled_df %>%
+  relocate(track, `Artist Name(s)`)
+
+
+```
+
+clus-turd
+
+```{r}
+# Maximum number of clusters to try
+max_k <- 10
+
+# Vector to store total within-cluster sum of squares for each k
+wcss <- numeric(max_k)
+
+
+for (k in 1:max_k) {
+  km <- kmeans(spotify_numeric, centers = k, nstart = 25)  # Forgy + 10 random starts
+  wcss[k] <- km$tot.withinss
+}
+
+# Plot the Elbow graph
+plot(1:max_k, wcss, type = "b",
+     xlab = "Number of clusters (k)",
+     ylab = "Total Within-Cluster Sum of Squares (WCSS)",
+     main = "Elbow Method for Determining Optimal k")
+
+
+```
+
+ima make k = 3 since 2 seems super small and not interesting though that is where the elbow is
+
+```{r}
+k = 3
+
+
+clusters = kmeans(spotify_numeric, centers = k, nstart = 25)
+
+scaled_df$cluster <- factor(clusters$cluster)
+# Plot the clusters
+ggplot(scaled_df, aes(x = `Danceability`, y = `Energy`, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "K-Means Clustering of Spotify Songs",
+       x = "Danceability", y = "Energy") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
+
+```
+im boutta pop off with this graph just watch
+
+```{r}
+numeric_columns <- colnames(scaled_df)[sapply(scaled_df, is.numeric)]
+
+# Calculate means by cluster for all numeric variables
+cluster_means <- scaled_df %>%
+  group_by(cluster) %>%
+  summarise(across(all_of(numeric_columns), mean))
+
+# Reshape to long format for plotting
+cluster_means_long <- cluster_means %>%
+  pivot_longer(cols = -cluster, names_to = "Variable", values_to = "Average")
+
+ggplot(cluster_means_long, aes(x = cluster, y = Average, fill = cluster)) +
+  geom_col(position = position_dodge()) +
+  facet_wrap(~ Variable, scales = "free_y") +
+  labs(title = "Average Values by Cluster for All Variables",
+       x = "Cluster",
+       y = "Average Value",
+       fill = "Cluster") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_brewer(palette = "Set2")
+
+
+
+```
+
+ok so 3 is spivey?? slower, softer, less energy, longer, not rly danceable, more acoustic, more instrumental
+
+1 is more upbeat faster songs, more electronic ones, but less popular than 2. 2 is slower and pretty middle on most categories except popularity. 2 is prob aiwen a lot. eh shes also probably in 1 a bunch but more 2. one i think has the rap/hiphop
+
+```{r}
+
+
+
+
+
+
+
+
