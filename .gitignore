@@ -2,13 +2,16 @@
 ### DIRECTORIES ###
 ###################
 
+
 figures
 internal
 research
 
+
 #############
 ### FILES ###
 #############
+
 
 *.docx
 template*
@@ -16,9 +19,11 @@ template*
 *.DS_Store
 .RDataTmp*
 
+
 ##############
 ### PYTHON ###
 ##############
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -249,9 +254,11 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
+
 ###########
 ### TEX ###
 ###########
+
 
 ## Core latex/pdflatex auxiliary files:
 *.aux
