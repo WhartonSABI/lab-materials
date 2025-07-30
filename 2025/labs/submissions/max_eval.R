@@ -1,35 +1,20 @@
----
-title: "Max Spotify Predictive Model"
-author: "Maximilian J. Gebauer"
-date: "2025-06-30"
-output: html_document
----
+# Max's Spotify Prediction Model Evaluation
+# Trains on 19_spotify-train.csv and evaluates on 19_spotify-test.csv
 
+library(tidyverse)
+library(glmnet)
+library(tidymodels)
+library(ranger)
+library(future)
+library(yardstick)
 
-Guide: load packages chunk, (make sure train data file path is correct), then run the following chunk which fits all three of the component models on the training data. In the chunk after, put in the csv file path in "test_data <- read.csv()" object already in code chunk, then run the chunk to pre-process the data for the form my models expect. Then run final chunk which returns a 10 by j matrix where each entry is the jth songs predicted prob for the ith person (and log loss of my model on the test data).
+# Set seed
+set.seed(17761)
 
-
-```{r Setup, include=FALSE, results='hide', warning=FALSE}
-knitr::opts_chunk$set(echo = T, fig.width=8, fig.height=4)
-options(scipen = 0, digits = 3) 
-
-if(!require("pacman")) install.packages("pacman")
-
-pacman::p_load(tidyverse, dplyr, ggthemes, data.table, lubridate, glmnet,
-               GGally, RColorBrewer, ggsci, plotROC, usmap,
-               plotly, ggpubr, vistime, coefplot, skimr, car, ggrepel, slider, lubridate,
-               tidymodels,ranger,vip,ggplot2, tune,dials,pdp, purrr, stringr, lmtest,
-               sandwich, xgboost, future.apply, mclust, ggdendro, flexclust, factoextra, cluster,
-               parsnip)
-```
-
-```{r}
-#load training data
+# Load training data
 data <- read.csv("../data/19_spotify-train.csv")
-```
 
-```{r}
-#one-hot encode all unique genre values
+# One-hot encode all unique genre values
 data_onehot <- data %>%
   mutate(.row = row_number()) %>%
   separate_rows(Genre, sep = ";") %>%
@@ -43,59 +28,55 @@ data_onehot <- data %>%
   ) %>%
   select(-.row)
 
-#remove unnecessary features
+# Remove unnecessary features
 sub_data <- data %>% 
   select(-c(Track.URI,track,Album.Name,Artist.Name.s.,Release.Date,Added.At,Record.Label,Genre, Key))
 
-#combine one hot features and other features
+# Combine one hot features and other features
 full_data <- cbind(sub_data,data_onehot)
 
 row.names(full_data) <- NULL
 
-#set variable natures
+# Set variable natures
 full_data$Explicit <- factor(full_data$Explicit)
 full_data$Mode <- factor(full_data$Mode)
 full_data$Time.Signature <- factor(full_data$Time.Signature)
 full_data$Added.by <- factor(full_data$Added.by)
 
-#features to scale
+# Features to scale
 scaling_features <- c("Duration..ms.", "Popularity", "Danceability", "Energy", "Loudness", "Speechiness", "Acousticness", "Instrumentalness", "Liveness", "Valence", "Tempo")
 
-#pull scaling features
+# Pull scaling features
 numerics <- full_data[, scaling_features]
 
-#scale requisite features
+# Scale requisite features
 numerics_scaled <- as.data.frame(scale(numerics))
 
-#pull unscaled features
+# Pull unscaled features
 full_sub_data <- full_data %>%
   select(-scaling_features)
 
-#put categroical, scaled, and one-hot features
+# Put categorical, scaled, and one-hot features
 cat_data <- cbind(full_sub_data,numerics_scaled)
 row.names(cat_data) <- NULL
 
-#set up model matrix to tune multinomial ridge model
-set.seed(17761)
+# Set up model matrix to tune multinomial ridge model
 X <- model.matrix(Added.by ~ ., data = cat_data)[,-1]
 y <- cat_data$Added.by
 
-#set for parallel processing
+# Set for parallel processing
 doParallel::registerDoParallel(cores = 6)
 
-#run grid search over lambda 
+# Run grid search over lambda 
 fit.lasso <- glmnet::cv.glmnet(X,y,alpha=0,nfolds = 6,family="multinomial", parallel = TRUE)
 
-#stop parallel
+# Stop parallel
 doParallel::stopImplicitCluster()
 
-#pull conservative 1SE lambda that minimizes average multinomial deviance across the kfolds
+# Pull conservative 1SE lambda that minimizes average multinomial deviance across the kfolds
 best_s_1 <- fit.lasso$lambda.1se
 
-#pull coefs to check (for fun)
-coef_list <- coef(fit.lasso, s = best_s_1)
-
-#refit on optimal lambda
+# Refit on optimal lambda
 preds_prob <- predict(
   fit.lasso, 
   newx = X, 
@@ -103,39 +84,31 @@ preds_prob <- predict(
   type = "response"
 )
 
-#below lines get probs into a df form for later use in an ensamble "stack" 
+# Below lines get probs into a df form for later use in an ensemble "stack" 
 prob_mat <- preds_prob[,,1] 
-
-prob_mat <- preds_prob[,,1]  
-
 prob_df_1 <- as.data.frame(preds_prob)
 
 k <- 2                    
 names(prob_df_1) <- substr(names(prob_df_1), 1, nchar(names(prob_df_1)) - k)
 
-
-#now setting up random forrest hyperparameter tuning
-library(tidymodels)
-library(ranger)
-library(future)
-
-#re specify data to be safe
+# Now setting up random forest hyperparameter tuning
+# Re specify data to be safe
 X <- model.matrix(Added.by ~ ., cat_data)[ , -1]
 y <- cat_data$Added.by
 
-#set data in a matrix ready for training
+# Set data in a matrix ready for training
 dtrain <- data.frame(
   Matrix::as.matrix(X),
   Added.by = factor(y)
 )
 
-#specify functional form
+# Specify functional form
 rf_rec <- recipe(Added.by ~ ., data = dtrain)
 
-#check raw n features
+# Check raw n features
 n_feat <- ncol(X)
 
-#tuning number of trees, min leaf size, and and num features to consider per split
+# Tuning number of trees, min leaf size, and num features to consider per split
 rf_spec <- rand_forest(
   trees = tune(),         
   mtry  = tune(),         
@@ -149,12 +122,12 @@ rf_spec <- rand_forest(
     num.threads     = parallel::detectCores()
   )
 
-#specify the tidy models workflow
+# Specify the tidy models workflow
 rf_wf <- workflow() %>% 
   add_recipe(rf_rec) %>% 
   add_model(rf_spec)
 
-#setting conservative ranges for hyperparameters
+# Setting conservative ranges for hyperparameters
 rf_param <- extract_parameter_set_dials(rf_wf) %>% 
   update(
     trees = trees(c(500, 2000)),
@@ -166,16 +139,15 @@ rf_param <- extract_parameter_set_dials(rf_wf) %>%
     `sample.fraction` = sample_prop(c(0.50, 0.80))  
   )
 
-#runnign grid search over hyperparameters value
-set.seed(17761)
+# Running grid search over hyperparameters value
 rf_grid <- grid_latin_hypercube(rf_param, size = 60)    
 
-#cross validate for tuning
+# Cross validate for tuning
 cv_folds <- vfold_cv(dtrain, v = 10, strata = Added.by)
 
 plan(multisession, workers = parallel::detectCores())
 
-#rune tune
+# Run tune
 rf_res <- tune_grid(
   rf_wf,
   resamples = cv_folds,
@@ -186,11 +158,11 @@ rf_res <- tune_grid(
 
 plan(sequential)
 
-#pull best model based on log loss
+# Pull best model based on log loss
 best_rf   <- select_best(rf_res)
 final_rf  <- finalize_workflow(rf_wf, best_rf) %>% fit(dtrain)
 
-#predict on train, then make sure df is set correctly for stacking
+# Predict on train, then make sure df is set correctly for stacking
 preds2 <- predict(final_rf, dtrain, type="prob")
 
 k <- 6                       
@@ -198,24 +170,24 @@ colnames(preds2) <- substring(names(preds2), k + 1)
 
 prob_df_2 <- preds2
 
-#specify response for stacking model
+# Specify response for stacking model
 y <- cat_data$Added.by
 
-#ensure col ordering for both sub model dfs is correct
+# Ensure col ordering for both sub model dfs is correct
 colnames(prob_df_2)  <- levels(y)
 colnames(prob_df_1) <- levels(y)
 
-#combine both predicted prob results into one df
+# Combine both predicted prob results into one df
 stack_df <- data.frame(
   prob_df_2,
   prob_df_1    
 )
 
-#set names for specificty, assumes 10 names
+# Set names for specificity, assumes 10 names
 names(stack_df) <- paste0(rep(c("rf_", "glm_"), each = 10),
                           rep(head(levels(y), 10), 2))
-#fit final stacking model trained on sub model predictions
-set.seed(17761)
+
+# Fit final stacking model trained on sub model predictions
 stack_fit <- cv.glmnet(
   x            = as.matrix(stack_df),
   y            = y,
@@ -225,20 +197,13 @@ stack_fit <- cv.glmnet(
   nfolds       = 10
 )
 
-#pull conservative 1SE lambda for stack later on test data
+# Pull conservative 1SE lambda for stack later on test data
 best_s <- stack_fit$lambda.1se
-```
 
+# Load test data
+test_data <- read.csv("../data/19_spotify-test.csv")
 
- 
-```{r}
-# test data processing chunk #
-
-#Feed me test data       #########################
-test_data <- read.csv("../data/19_spotify-test.csv")  ## <- Put in test data ##
-                         #########################
-
-#one hot encode all values found in the Genre feature
+# One hot encode all values found in the Genre feature
 test_onehot <- test_data %>%
   mutate(.row = row_number()) %>%
   separate_rows(Genre, sep = ";") %>%
@@ -252,59 +217,58 @@ test_onehot <- test_data %>%
   ) %>%
   select(-.row)
 
-# take out unnecessary features
+# Take out unnecessary features
 sub_test <- test_data %>% 
   select(-c(Track.URI,track,Album.Name,Artist.Name.s.,Release.Date,Added.At,Record.Label,Genre, Key))
 
-#recombine one-hot genre features and required numeric features
+# Recombine one-hot genre features and required numeric features
 full_test <- cbind(sub_test,test_onehot)
 
 row.names(full_test) <- NULL
 
-#set a few features as factors
+# Set a few features as factors
 full_test$Explicit <- factor(full_test$Explicit)
 full_test$Mode <- factor(full_test$Mode)
 full_test$Time.Signature <- factor(full_test$Time.Signature)
 full_test$Added.by <- factor(full_test$Added.by)
 
-#manually specify the numeric features to be normalized
+# Manually specify the numeric features to be normalized
 scaling_features_test <- c("Duration..ms.", "Popularity", "Danceability", "Energy", "Loudness", "Speechiness", "Acousticness", "Instrumentalness", "Liveness", "Valence", "Tempo")
 
-#pull numeric features
+# Pull numeric features
 numerics_test <- full_test[, scaling_features_test]
 
-#scale numeric features
+# Scale numeric features
 numerics_scaled_test <- as.data.frame(scale(numerics_test))
 
-#remove unscaled features
+# Remove unscaled features
 full_sub_test <- full_test %>%
   select(-scaling_features_test)
 
-#put scaled, categorical, and one-hot features together
+# Put scaled, categorical, and one-hot features together
 cat_data_test <- cbind(full_sub_test,numerics_scaled_test)
 row.names(cat_data_test) <- NULL
 
-#ensure test data has all the same columns as training data
+# Ensure test data has all the same columns as training data
 missing_cols <- setdiff(names(cat_data), names(cat_data_test))
 if(length(missing_cols) > 0) {
   cat_data_test[missing_cols] <- 0
 }
-#ensure columns are in the same order as training data
-cat_data_test <- cat_data_test[, names(cat_data)]
-```
 
-```{r}
-#setting test data up for prediction
+# Ensure columns are in the same order as training data
+cat_data_test <- cat_data_test[, names(cat_data)]
+
+# Setting test data up for prediction
 X_m1 <- model.matrix(Added.by ~ ., data = cat_data_test)[,-1]
 y_test <- cat_data_test$Added.by
 
-#create df for RF model
+# Create df for RF model
 dtest <- data.frame(
   Matrix::as.matrix(X_m1),
   Added.by = factor(y_test)
 )
 
-#predict using sub_model 1 (multinomial logistic)
+# Predict using sub_model 1 (multinomial logistic)
 preds_prob_test <- predict(
   fit.lasso, 
   newx = X_m1, 
@@ -312,23 +276,23 @@ preds_prob_test <- predict(
   type = "response"
 )
 
-#pull results and set up for stacking
+# Pull results and set up for stacking
 prob_df_1_test <- as.data.frame(preds_prob_test)
 
 k <- 2                    
 names(prob_df_1_test) <- substr(names(prob_df_1_test), 1, nchar(names(prob_df_1_test)) - k)
 
-#use fitted RF model to predict on test data
+# Use fitted RF model to predict on test data
 preds2_test <- predict(final_rf, dtest, type="prob")
 
-#put rf results in proper form for stacking
+# Put rf results in proper form for stacking
 k <- 6                       
 colnames(preds2_test) <- substring(names(preds2_test), k + 1)
 
 prob_df_2_test <- preds2_test
 prob_df_2_test <- as.data.frame(prob_df_2_test)
 
-#setting up stacked model data
+# Setting up stacked model data
 colnames(prob_df_2_test)  <- levels(y_test)
 colnames(prob_df_1_test) <- levels(y_test)
 
@@ -339,7 +303,7 @@ stack_df_test <- data.frame(
 names(stack_df_test) <- paste0(rep(c("rf_", "glm_"), each = 10),
                           rep(head(levels(y_test), 10), 2))
 
-#use stack model fit on training data to predict on the test data
+# Use stack model fit on training data to predict on the test data
 final_model <- predict(
   stack_fit, 
   newx = as.matrix(stack_df_test), 
@@ -347,18 +311,17 @@ final_model <- predict(
   type = "response"
 )
 
-#the final output, a n by 10 matrix giving the prob predicted for each response level for each observation in the test data
+# The final output, a n by 10 matrix giving the prob predicted for each response level for each observation in the test data
 prob_mat_final_test <- final_model[,,1]
 
-#setting up df for computing log loss of model on test data
+# Setting up df for computing log loss of model on test data
 loss_tbl <- as_tibble(prob_mat_final_test) %>%
   mutate(.truth = y_test, .rowid = row_number()) %>%
   relocate(.truth, .rowid)
 
-#return log loss
-mn_log_loss(loss_tbl, truth = .truth, !!!syms(colnames(prob_mat_final_test)))
-```
+# Calculate log loss
+log_loss <- mn_log_loss(loss_tbl, truth = .truth, !!!syms(colnames(prob_mat_final_test)))
 
-
-
-
+cat("=== Max's Ensemble Model Test Log Loss ===\n")
+cat("Log Loss:", log_loss$.estimate, "\n")
+cat("Test rows processed:", nrow(cat_data_test), "\n") 

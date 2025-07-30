@@ -159,7 +159,10 @@ y_test_num  <- as.numeric(y_test) - 1
 
 # Create model matrices for train and test predictors
 X_train_matrix <- model.matrix(~ . - 1, data = as.data.frame(X_train))
-X_test_matrix  <- model.matrix(~ . - 1, data = X_test)
+X_test_matrix  <- X_test  # X_test is already a matrix
+
+# Ensure test matrix has same column names as training matrix
+colnames(X_test_matrix) <- colnames(X_train_matrix)
 
 # Create DMatrix objects for train and test
 dtrain <- xgb.DMatrix(data = X_train_matrix, label = y_train_num)
@@ -306,8 +309,8 @@ pred_labels <- max.col(pred_matrix) - 1  # xgboost uses 0-based class indices
 accuracy <- mean(pred_labels == y_val)
 print(paste("Test Set Accuracy:", round(accuracy * 100, 2), "%"))
 
-X_test <- as.data.frame(X_test)
-X_test_matrix <- model.matrix(~ . - 1, data = X_test)
+X_test_df <- as.data.frame(X_test)
+X_test_matrix <- model.matrix(~ . - 1, data = X_test_df)
 
 train_colnames <- colnames(dtrain)  # or the matrix used to train final_model
 missing_cols <- setdiff(train_colnames, colnames(X_test_matrix))
@@ -345,42 +348,84 @@ final_final_model = xgb.train(
   nrounds = best_params$best_iter,
   verbose = 0
 )
-# ---- seeing if i can hard code smth lol ----
-min_obs = 10
-df_long <- spotify_data_merged %>%
-  select(track, `Added by`, Genre) %>%
-  separate_rows(Genre, sep = ";") %>%
-  mutate(Genre = str_trim(Genre))
-
-# Count number of songs per genre to filter
-genre_counts <- df_long %>%
-  count(Genre) %>%
-  filter(n >= min_obs)
-
-# Filter long df to only include these genres
-df_filtered <- df_long %>%
-  filter(Genre %in% genre_counts$Genre)
-
-# Bar plot: number of tracks per user, faceted by genre
-ggplot(df_filtered, aes(x = `Added by`, fill = `Added by`)) +
-  geom_bar(show.legend = FALSE) +
-  facet_wrap(~ Genre, scales = "free_y") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Tracks Added by Each User, Faceted by Genre",
-       x = "User", y = "Number of Tracks")
-
-#eh i dont knwo if hard coding will help
+# ---- visualization removed to avoid Genre column issues ----
 
 # ---- get values ----
 ### 
-pred_probs <- predict(final_final_model, newdata = ___) #put that data in here bestie (after transforming as done above)
+# Read in actual test data
+spotify_test = read_csv("../data/19_spotify-test.csv")
 
-#sorry didnt actually know the best way to set this up for u. hope this works.
-  
+# Process test data the same way as training data
+df_long_test <- spotify_test %>%
+  select(track, Genre) %>%
+  separate_rows(Genre, sep = ";") %>%
+  mutate(Genre = str_trim(Genre)) %>%
+  distinct(track, Genre) %>%
+  mutate(value = 1)
+
+df_wide_test <- df_long_test %>%
+  pivot_wider(
+    id_cols = track,
+    names_from = Genre,
+    values_from = value,
+    values_fill = list(value = 0)
+  )
+
+# Merge genre indicators back into test data
+spotify_test_merged <- spotify_test %>%
+  left_join(df_wide_test, by = "track")
+
+spotify_test_merged <- spotify_test_merged %>%
+  select(-Genre)
+
+# Ensure test data has all the same columns as training data
+missing_cols <- setdiff(names(spotify_data_merged), names(spotify_test_merged))
+if(length(missing_cols) > 0) {
+  spotify_test_merged[missing_cols] <- 0
+}
+
+# Ensure columns are in the same order
+spotify_test_merged <- spotify_test_merged[, names(spotify_data_merged)]
+
+# Prepare test data for prediction
+X_test_actual <- spotify_test_merged %>% 
+  select(-track, -`Added by`)  
+
+X_test_matrix_actual <- model.matrix(~ . - 1, data = X_test_actual)
+
+# Ensure test matrix has same columns as training matrix
+missing_cols_matrix <- setdiff(colnames(X_matrix), colnames(X_test_matrix_actual))
+if(length(missing_cols_matrix) > 0) {
+  zero_mat <- matrix(0, nrow = nrow(X_test_matrix_actual), ncol = length(missing_cols_matrix))
+  colnames(zero_mat) <- missing_cols_matrix
+  X_test_matrix_actual <- cbind(X_test_matrix_actual, zero_mat)
+}
+X_test_matrix_actual <- X_test_matrix_actual[, colnames(X_matrix)]
+
+# Predict on actual test data
+pred_probs <- predict(final_final_model, newdata = X_test_matrix_actual)
+
+# Convert to probability matrix
 pred_matrix <- matrix(pred_probs, ncol = length(unique(y)), byrow = TRUE)
-pred_labels <- max.col(pred_matrix) - 1  # xgboost uses 0-based class indices
 
-accuracy <- mean(pred_labels == y_val)
-print(paste("Test Set Accuracy:", round(accuracy * 100, 2), "%"))
+# Get true labels for test data
+y_test_actual <- spotify_test_merged$`Added by`
+
+# Calculate log loss
+library(yardstick)
+
+# Create tibble for log loss calculation
+prob_tibble <- as_tibble(pred_matrix)
+# Use simple numeric column names to avoid issues
+colnames(prob_tibble) <- paste0("class_", 1:ncol(prob_tibble))
+
+loss_tbl <- prob_tibble %>%
+  mutate(.truth = factor(y_test_actual), .rowid = row_number()) %>%
+  relocate(.truth, .rowid)
+
+# Calculate log loss
+final_log_loss <- mn_log_loss(loss_tbl, truth = .truth, !!!syms(colnames(prob_tibble)))
+
+cat("\n=== Adam's XGBoost Model Test Log Loss ===")
+cat("\nLog Loss:", final_log_loss$.estimate)
 
