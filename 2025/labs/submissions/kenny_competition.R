@@ -111,23 +111,69 @@ y_test  <- y[-train_idx]
 # Ensemble Model
 
 ridge_fit <- cv.glmnet(
-  X_mat, y, 
+  X_train, y_train, 
   alpha = 0,
   family = "multinomial"
 )
 
-# Cross Entropy Loss
+plot(ridge_fit)
 
-pred_probs <- predict(ridge_fit, newx = X_mat, s = "lambda.min", type = "response")
+lasso_fit <- cv.glmnet(
+  X_train, y_train, 
+  alpha = 1,
+  family = "multinomial"
+)
+
+plot(lasso_fit)
+
+# Cross Entropy Loss (Ridge)
+
+pred_probs <- predict(ridge_fit, newx = X_test, s = "lambda.min", type = "response")
 
 prob_matrix <- as.matrix(pred_probs[, , 1])
 
-colnames(prob_matrix) <- levels(y)
+colnames(prob_matrix) <- levels(y_test)
 
 ce_loss <- MLmetrics::MultiLogLoss(
   y_pred = prob_matrix,
-  y_true = y
+  y_true = y_test
 )
 
 cat("Cross-Entropy Loss:", ce_loss, "\n")
+
+# Cross Entropy Loss (Lasso)
+
+pred_probs_lasso <- predict(lasso_fit, newx = X_test, s = "lambda.min", type = "response")
+
+prob_matrix_lasso <- as.matrix(pred_probs_lasso[, , 1])
+
+colnames(prob_matrix_lasso) <- levels(y)
+
+ce_loss_lasso <- MLmetrics::MultiLogLoss(
+  y_pred = prob_matrix_lasso,
+  y_true = y_test
+)
+
+cat("Cross-Entropy Loss:", ce_loss_lasso, "\n")
+
+######################
+# Actual Final Model #
+######################
+
+
+final_model <- cv.glmnet(
+  X_mat, y, 
+  alpha = 1,
+  family = "multinomial"
+)
+
+#predict(lasso_fit, newx = , s = "lambda.min", type = "response")
+
+#ce_loss <- MLmetrics::MultiLogLoss(
+#  y_pred = ,
+#  y_true = 
+#)
+
+#cat("Cross-Entropy Loss:", ce_loss_lasso, "\n")
+
 

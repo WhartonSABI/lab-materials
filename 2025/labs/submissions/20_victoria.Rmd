@@ -1,0 +1,219 @@
+---
+title: "Lab 20 - Game Theory"
+output: html_notebook
+---
+
+Task 20.1.2
+
+Write function to take matrix A and output probabilities
+```{r}
+library(plotly)
+library(tidyverse)
+library(lpSolve)
+
+solve_penalty_game <- function(A) {
+  if (!is.matrix(A) || any(dim(A) != c(3, 3))) stop("A must be a 3x3 matrix")
+  
+  # Kicker LP: max v such that t(p) %*% A >= v, sum(p) = 1, p >= 0
+  f.obj <- c(0, 0, 0, 1)
+  f.con <- rbind(
+    c(A[1, ], -1),
+    c(A[2, ], -1),
+    c(A[3, ], -1),
+    c(1, 1, 1, 0)
+  )
+  f.dir <- c(">=", ">=", ">=", "==")
+  f.rhs <- c(0, 0, 0, 1)
+  result <- lp("max", f.obj, f.con, f.dir, f.rhs)
+  #if (result$status != 0 || is.null(result$solution)) return(rep(NA, 7))
+  q_star <- result$solution[1:3] #return goalkeeper strategy
+  #if (sum(q_star) == 0) return(rep(NA, 7))
+  q_star <- q_star / sum(q_star)
+  v_star <- result$objval
+
+  # Goalkeeper LP: min v such that A^T %*% p <= v, sum(p) = 1, p >= 0
+  g.obj <- c(0, 0, 0, 1)
+  g.con <- rbind(
+    c(A[,1], -1),
+    c(A[,2], -1),
+    c(A[,3], -1),
+    c(1, 1, 1, 0)
+  )
+  g.dir <- c("<=", "<=", "<=", "==")
+  g.rhs <- c(0, 0, 0, 1)
+  result2 <- lp("min", g.obj, g.con, g.dir, g.rhs)
+  #if (result2$status != 0 || is.null(result2$solution)) return(rep(NA, 7))
+  p_star <- result2$solution[1:3] #return kicker strategy
+  #if (sum(p_star) == 0) return(rep(NA, 7))
+  p_star <- p_star / sum(p_star)
+
+  return(c(p_star, q_star, v_star))
+}
+```
+
+
+```{r}
+a_vals <- seq(0.0, 0.5, length.out = 8)
+e_vals <- seq(0.0, 0.5, length.out = 8)
+b_vals <- seq(0.5, 1.0, length.out = 8)
+c_vals <- seq(0.5, 1.0, length.out = 8)
+d_vals <- seq(0.5, 1.0, length.out = 8)
+
+#EXPAND GRID
+param_grid <- expand.grid(a = a_vals, b = b_vals, c = c_vals, d = d_vals, e = e_vals) 
+
+results <- data.frame()
+
+for (i in 1:nrow(param_grid)) {
+  a <- param_grid$a[i]
+  b <- param_grid$b[i]
+  c <- param_grid$c[i]
+  d <- param_grid$d[i]
+  e <- param_grid$e[i]
+  
+  # Construct symmetric matrix without noise
+  A <- matrix(c(
+    a, b, c,
+    d, e, d,
+    c, b, a
+  ), nrow = 3, byrow = TRUE)
+  
+  out <- solve_penalty_game(A)
+
+  results <- rbind(results, data.frame(
+    a = a, b = b, c = c, d = d, e = e,
+    pL = out[1], pC = out[2], pR = out[3],
+    qL = out[4], qC = out[5], qR = out[6],
+    v = out[7]
+  ))
+}
+```
+
+
+```{r}
+library(PNWColors)
+library(ggplot2)
+pal = pnw_palette("Bay",100,type="continuous")
+
+ggplot(results, aes(x = d, y = e, fill = pC)) +
+  geom_tile() +
+  scale_fill_gradientn(colours = pal)
+  labs(
+    title = "Equilibrium probability of shooting Center",
+    x = "d (off-center payoff)",
+    y = "e (center payoff)"
+  ) +
+  theme_minimal()
+```
+
+3D heat map based on a, d, c probability
+```{r}
+plotly_colorscale <- lapply(0:99, function(i) {
+  list(i / 99, pal[i + 1])
+})
+
+plot_ly(
+  data = results,
+  x = ~a, y = ~d, z = ~c, type = "scatter3d", mode = "markers",
+  marker = list(
+    size = 3,
+    color = ~qL,  # move this here!
+    colorscale = plotly_colorscale,
+    colorbar = list(title = "q*_L")
+  ),
+  showscale = TRUE
+) %>%
+  layout(
+    title = "Goalkeeper's equilibrium probability of diving Left (q*_L)",
+    scene = list(
+      xaxis = list(title = "a"),
+      yaxis = list(title = "d"),
+      zaxis = list(title = "c")
+    )
+  )
+```
+
+```{r}
+n_points <- 5  # control resolution (adjust for speed vs granularity)
+vals_01 <- seq(0.0, 0.5, length.out = n_points)
+vals_05 <- seq(0.5, 1.0, length.out = n_points)
+
+# Grid for a, b, c, d, e, f, g, h
+grid_raw <- expand.grid(
+  a = vals_01,
+  b = vals_05,
+  c = vals_05,
+  d = vals_05,
+  e = vals_01,
+  f = vals_05,
+  g = vals_05,
+  h = vals_01
+)
+
+param_grid2 <- grid_raw %>%
+  filter(a > h, b > g, c > f)
+
+results2 <- data.frame()
+
+for (i in 1:nrow(param_grid2)) {
+  a <- param_grid2$a[i]
+  b <- param_grid2$b[i]
+  c <- param_grid2$c[i]
+  d <- param_grid2$d[i]
+  e <- param_grid2$e[i]
+  f <- param_grid2$f[i]
+  g <- param_grid2$g[i]
+  h <- param_grid2$h[i]
+  
+  # Construct symmetric matrix without noise
+  A <- matrix(c(
+    a, b, c,
+    d, e, d,
+    f, g, h
+  ), nrow = 3, byrow = TRUE)
+  
+  out <- solve_penalty_game(A)
+
+  results2 <- rbind(results2, data.frame(
+    a = a, b = b, c = c, d = d, e = e, f = f, g = g, h = h,
+    pL = out[1], pC = out[2], pR = out[3],
+    qL = out[4], qC = out[5], qR = out[6],
+    v = out[7]
+  ))
+}
+```
+```{r}
+ggplot(results2, aes(x = d, y = e, fill = pC)) +
+  geom_tile() +
+  scale_fill_gradientn(colours = pal)
+  labs(
+    title = "Equilibrium probability of shooting Center",
+    x = "d (off-center payoff)",
+    y = "e (center payoff)"
+  ) +
+  theme_minimal()
+```
+We see that the probability of shooting center is shifted more left, meaning it covers a less area, likely because the kicker is stronger on the right side. 
+```{r}
+plot_ly(
+  data = results2,
+  x = ~a, y = ~d, z = ~f,
+  type = "scatter3d", mode = "markers",
+  marker = list(
+    size = 3,
+    color = ~qL,  # move this here!
+    colorscale = plotly_colorscale,
+    colorbar = list(title = "q*_L")
+  ),
+  showscale = TRUE
+) %>%
+  layout(
+    title = "Goalkeeper's equilibrium probability of diving Left (q*_L)",
+    scene = list(
+      xaxis = list(title = "a"),
+      yaxis = list(title = "d"),
+      zaxis = list(title = "f")
+    )
+  )
+```
+
