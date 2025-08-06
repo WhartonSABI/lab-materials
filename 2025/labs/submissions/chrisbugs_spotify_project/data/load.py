@@ -31,7 +31,7 @@ import joblib
 from pathlib import Path
 
 # Replace with your data path
-INPUT_PATH = "/Users/chrisbugs/summer-lab/2025/labs/data/19_spotify-train.csv"
+INPUT_PATH = "../../../data/19_spotify-train.csv"
 # Preprocessor path for saving the preprocessing pipeline
 PREPROCESSOR_PATH = Path(__file__).resolve().parent / "preprocessor.joblib"
 
