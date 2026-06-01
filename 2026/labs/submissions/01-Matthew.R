@@ -47,6 +47,28 @@ rmse = function(y, yhat) sqrt(mean((y - yhat)^2, na.rm = TRUE))
 rmse_alpha = rmse(pythag_data$WP, pythag_data$wp_hat_alpha)
 rmse_bj = rmse(pythag_data$WP, pythag_data$wp_hat_bj)
 
+ggplot(data=pythag_data)+
+  geom_point(aes(x=wp_hat_bj, y=WP))+
+  geom_abline(intercept = 0, slope = 1, color = "red", linewidth=1)+
+  labs(title="Predicted vs Actual Win Probability BJ")+
+  geom_smooth(aes(x=wp_hat_bj, y=WP))
+ggplot(data=pythag_data)+
+  geom_point(aes(x=wp_hat_alpha, y=WP))+
+  geom_abline(intercept = 0, slope = 1, color = "red", linewidth=1)+
+  labs(title="Predicted vs Actual Win Probability Us")+
+  geom_smooth(aes(x=wp_hat_alpha, y=WP))
+ggplot(data=pythag_data)+
+  geom_point(aes(x=wp_hat_bj, y=resid_bj))+
+  geom_abline(intercept = 0, slope = 0, color = "red", linewidth=1)+
+  labs(title="Residuals BJ")+
+  geom_smooth(aes(x=wp_hat_bj, y=resid_bj))
+ggplot(data=pythag_data)+
+  geom_point(aes(x=wp_hat_alpha, y=resid_alpha))+
+  geom_abline(intercept = 0, slope = 0, color = "red", linewidth=1)+
+  labs(title="Residuals Us")+
+  geom_smooth(aes(x=wp_hat_alpha, y=resid_alpha))
+#THESE ALL HAVE CURVATURE THE LOESS PROVES IT
+#1.8 IS WAY BETER THAN 2
 ##############
 ### PART 2 ###
 ##############
@@ -72,11 +94,74 @@ payroll_data = payroll_data %>%
     fitted_b = fitted(model_b),
     resid_b = resid(model_b)
   )
+ggplot(payroll_data,
+       aes(y = wp, x = payroll_median_ratio,
+           color = factor(case_when(
+             team_id == "OAK" ~ "Oakland",
+             team_id == "NYA" ~ "Yankees",
+             TRUE ~ "Other"
+           )))) +
+  geom_point() +
+#  geom_smooth(method = "loess",
+#              formula = y ~ x,
+#              span = 0.05,
+#              color = "hotpink") +
+  scale_color_manual(
+    values = c(
+      "Oakland" = "darkgreen",
+      "Yankees" = "black",
+      "Other" = "gray70"
+    ),
+    breaks = c("Yankees", "Oakland"),
+    name = NULL
+  )
 
+ggplot(payroll_data, aes(x = payroll_median_ratio, y = wp)) +
+  geom_point(color = "gray40") +
+  geom_line(aes(y = fitted_a, color = "Linear Model"),
+            linewidth = 1) +
+  geom_line(aes(y = fitted_b, color = "Log Model"),
+            linewidth = 1) +
+  scale_color_manual(
+    values = c(
+      "Linear Model" = "steelblue",
+      "Log Model" = "skyblue"
+    ),
+    name = "Fitted Models"
+  ) +
+  labs(
+    title = "Relationship Between Payroll and Winning Percentage",
+    subtitle = "Observed data with linear and logarithmic fitted models",
+    x = "Payroll Relative to League Median",
+    y = "Winning Percentage"
+  ) +
+  theme_minimal()
+               
+ggplot(payroll_data, aes(x = payroll_median_ratio, alpha=.1)) +
+  geom_point(aes(y = resid_a, color = "Linear Model")) +
+  geom_point(aes(y = resid_b, color = "Log Model")) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_color_manual(
+    values = c(
+      "Linear Model" = "steelblue",
+      "Log Model" = "skyblue"
+    ),
+    name = "Model"
+  ) +
+  labs(
+    title = "Residuals vs. Relative Payroll",
+    subtitle = "Comparison of linear and logarithmic models",
+    x = "Payroll Relative to League Median",
+    y = "Residual"
+  ) +
+  theme_minimal()
+    
 # example: CI and PI for one selected team-season
 # replace row_idx with your selected row index
-row_idx = 1
+row_idx = 67
 selected_row = payroll_data[row_idx, ]
 
 ci_model_b = predict(model_b, newdata = selected_row, interval = "confidence", level = 0.95)
 pi_model_b = predict(model_b, newdata = selected_row, interval = "prediction", level = 0.95)
+
+#PI is higher, as we are estimatingthe mean and the error, not just the error.
