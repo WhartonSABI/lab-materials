@@ -227,38 +227,35 @@ predict(m3, one_punt, interval = "confidence") #[79.62, 80.11]
 predict(m3, one_punt, interval = "prediction") #[58.68, 101.05]
 #prediction interval is wider because there is additional residual variance for predicting individual team performance on top of uncertainty in the mean
 
-# Task 1:
-# - Plot post-punt yard line against starting yard line
-# - Bin punts by starting field position and plot average post-punt yard line in each bin
-# - Describe the shape of the relationship and where it bends
-# - Plot or summarize the distribution of punter quality
+ci <- predict(m3, newdata = grid, interval = "confidence", level = 0.95)
+grid_ci <- grid %>%
+  mutate(fit = ci[, "fit"], lwr = ci[, "lwr"], upr = ci[, "upr"])
+ggplot(grid_ci, aes(x = ydl)) +
+  geom_point(data = punts, aes(ydl, next_ydl), alpha = 0.05) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "steelblue", alpha = 0.3) +
+  geom_line(aes(y = fit), color = "steelblue", linewidth = 1) +
+  labs(x = "starting yard line (ydl)", y = "post-punt yard line")
+#the band seems to widen at closer to ydl due to fewer punts
 
-# Task 2:
-# - Fit competing punt models: linear, quadratic, quadratic plus punter quality, and spline
-# - Visualize the fitted curves from each model
-# - Use train/test RMSE or cross-validation to choose a preferred model
-# - Compare the linear, quadratic, and spline tradeoffs
-# - Assess whether punter quality improves out-of-sample prediction
-# - Interpret the punter-quality coefficient if it is included in the selected model
+punts <- punts %>%
+  mutate(
+    expected = predict(m3, newdata = punts),  
+    pyoe     = next_ydl - expected 
+  )
 
-# Task 3:
-# - Plot the fitted mean response for the selected punt model
-# - Add a 95% confidence band for the expected response
-# - Add a 95% prediction band for one individual punt
-# - Explain why the prediction band is wider
-# - Identify where the model is most uncertain
+punts_pyoe <- punts %>%
+  group_by(punter) %>%
+  summarise(avg_pyoe = mean(pyoe), n = n()) %>%
+  arrange(desc(avg_pyoe)) %>%
+  head()
 
-# Task 4:
-# - Define punt yards over expected so that positive values are better punts
-# - Compute PYOE for each punt
-# - For each punter, compute average PYOE, number of punts, and standard error of average PYOE
-# - Rank punters by average PYOE
-# - Visualize punter rankings with uncertainty intervals
-# - Identify which punters look clearly above average and which rankings are unstable
+punts_pyoe
+
+#highest scores are dominated by 1/2 punt small samples
 
 # Final reflection:
-# - Explain how adding columns changed what the model could fit
-# - Explain when flexibility helped and when it could hurt
-# - Interpret the residual standard error in this setting
-# - Explain why prediction intervals are wider than confidence intervals
-# - Note one coefficient, prediction, or ranking you would interpret cautiously
+# 1. Adding columns (ydl^2, then pq) widened the space of shapes the model could fit from a straight line, to a curve, to a curve that shifts with punter quality.
+# 2. Flexibility helped going linear -> quadratic, where cross-validated RMSE fell
+# 4. sigma-hat ~= 10.8 yards is the typical size of the model's errors -- any single punt's outcome lands about 10-11 yards from its prediction on average.
+# 5. The prediction interval is wider because it adds the irreducible punt-to-punt scatter (sigma^2) on top of the confidence interval's uncertainty in the estimated mean.
+# 6. punters with few punts have large standard errors that make their extreme positions unstable.
