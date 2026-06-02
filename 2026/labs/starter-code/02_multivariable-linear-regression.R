@@ -80,6 +80,7 @@ punts = read_csv("../data/02_punts.csv")
 
 # Task 4:
 # - Define punt yards over expected so that positive values are better punts
+# - Use PYOE = y - expected
 # - Compute PYOE for each punt
 # - For each punter, compute average PYOE, number of punts, and standard error of average PYOE
 # - Rank punters by average PYOE
