@@ -1,0 +1,903 @@
+---
+title: "02_Mackenzie"
+output: html_document
+date: "2026-06-02"
+---
+
+```{r}
+
+#############
+### SETUP ###
+#############
+
+# install.packages(c("ggplot2", "tidyverse"))
+library(ggplot2)
+library(tidyverse)
+
+# set seed
+set.seed(3)
+
+##############
+### PART 1 ###
+##############
+
+# load data
+nba_four_factors_raw = read_csv("/Users/mackenziebuckner/Desktop/lab-materials/2026/labs/data/02_nba-four-factors.csv")
+
+#Create assignment variables
+nba_four_factors <- nba_four_factors_raw %>%
+  transmute(
+    team = TEAM,
+    season = `Season End`,
+    team_season = Team_Season,
+    wins = W,
+    
+    # x1: shooting advantage
+    x1 = `EFG%` - `OPP EFG%`,
+    
+    # x2: rebounding advantage
+    x2 = `OREB%` + `DREB%` - 100,
+    
+    # x3: turnover advantage
+    x3 = `OPP TOV %` - `TOV%`,
+    
+    # x4: free throw rate advantage, multiplied by 100 so it is in percentage-point units
+    x4 = 100 * (`FT Rate` - `OPP FT Rate`)
+  ) %>%
+  drop_na()
+
+factor_names <- tibble(
+  factor = c("x1", "x2", "x3", "x4"),
+  factor_label = c(
+    "x1: Shooting advantage",
+    "x2: Rebounding advantage",
+    "x3: Turnover advantage",
+    "x4: Free throw rate advantage"
+  )
+)
+
+
+# Task 1:
+# - Compute each variable's mean, standard deviation, minimum, and maximum
+summary_stats <- nba_four_factors %>%
+  summarise(
+    across(
+      c(wins, x1:x4),
+      list(
+          mean = ~mean(.x, na.rm = TRUE),
+          sd = ~sd(.x, na.rm = TRUE),
+          min = ~min(.x, na.rm = TRUE),
+          max = ~max(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = c("variable", "stat"),
+    names_pattern = "(.+)_(mean|sd|min|max)",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from = stat,
+    values_from = value
+  )
+  
+print(summary_stats)
+
+# Long version of the four factors for easy plotting
+nba_long <- nba_four_factors %>%
+  pivot_longer(
+    cols = x1:x4,
+    names_to = "factor",
+    values_to = "value"
+  ) %>%
+  left_join(factor_names, by = "factor")
+
+# - Plot the marginal distribution of each explanatory variable
+ggplot(nba_long, aes(x = value)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~ factor_label, scales = "free") +
+  labs(
+    title = "Marginal Distributions of the Four Factors",
+    x = "Factor value",
+    y = "Count"
+  )
+
+# - Make scatterplots of wins against each of the four factors
+ggplot(nba_long, aes(x = value, y = wins)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ factor_label, scales = "free_x") +
+  labs(
+    title = "Wins vs. Each Four Factor Variable",
+    x = "Factor value",
+    y = "Wins"
+  )
+
+# - Compute correlations between each pair of explanatory variables
+factor_correlations <- cor(
+  nba_four_factors %>% select(x1:x4),
+  use = "complete.obs"
+)
+
+print(factor_correlations)
+
+wins_correlations <- nba_four_factors %>%
+  summarise(across(x1:x4, ~cor(wins, .x, use = "complete.obs"))) %>%
+  pivot_longer(
+    everything(),
+    names_to = "factor",
+    values_to = "correlation_with_wins"
+  ) %>%
+  left_join(factor_names, by = "factor") %>%
+  arrange(desc(abs(correlation_with_wins)))
+
+print(wins_correlations)
+
+# - Identify which variables look most strongly related to wins before fitting a model
+
+# Before fitting the multivariable model, the variable with the largest absolute correlation with wins looks most strongly related to wins. Based on the printed correlations, shooting advantage x1 should be the strongest simple predictor. The other factors may still matter after adjustment, but their marginal relationships with wins appear weaker. 
+
+
+# Task 2:
+# - Fit the multivariable model: wins ~ x1 + x2 + x3 + x4
+four_factors_model <- lm(wins ~ x1 + x2 + x3 + x4, data = nba_four_factors)
+
+summary(four_factors_model)
+
+# - Write down the fitted regression equation
+
+coefs <- coef(four_factors_model)
+
+cat("\nFitted regression equation:\n")
+cat(
+  "wins_hat = ",
+  round(coefs["(Intercept)"], 3),
+  " + ", round(coefs["x1"], 3)," *x1",
+  "+ ", round(coefs["x2"], 3), " * x2",
+  "+ ", round(coefs["x3"], 3), " * x3",
+  "+ ", round(coefs["x4"], 3), " * x4",
+  "\n"
+)
+
+
+# - Interpret each coefficient in context
+coefficient_interpretations <- tibble(
+  factor = c("x1", "x2", "x3", "x4"),
+  factor_label = c(
+    "Shooting advantage",
+    "Rebounding advantage",
+    "Turnover advantage",
+    "Free throw rate advantage"
+  ),
+  estimate = coefs[c("x1", "x2", "x3", "x4")],
+  interpretation = c(
+    "Holding the other factors constant, a 1 percentage-point increase in shooting advantage is associated with this many additional wins.",
+    "Holding the other factors constant, a 1 percentage-point increase in rebounding advantage is associated with this many additional wins.",
+    "Holding the other factors constant, a 1 percentage-point increase in turnover advantage is associated with this many additional wins.",
+    "Holding the other factors constant, a 1 percentage-point increase in free throw rate advantage is associated with this many additional wins."
+  )
+)
+
+print(coefficient_interpretations)
+
+# Rank factors after adjustment using absolute t-statistics
+adjusted_strength <- as.data.frame(summary(four_factors_model)$coefficients) %>%
+  rownames_to_column("term") %>%
+  rename(
+    estimate = Estimate,
+    std_error = `Std. Error`,
+    t_value = `t value`,
+    p_value = `Pr(>|t|)`
+  ) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(abs_t_value = abs(t_value)) %>%
+  arrange(desc(abs_t_value))
+
+print(adjusted_strength)
+
+# - Check whether the coefficient signs make sense given the variable definitions
+# Since x1, x2, x3, and x4 were defined so larger values are better, positive coefficient signs make sense. A positive coefficient means that, after controlling for the other factors, teams with more of that advantage are predicted to win more games.
+
+# - Identify which factors look strongest and weakest after adjustment
+# The strongest adjusted factor is the one with the largest absolute t-value in adjusted_strength. The weakest adjusted factor is the one with the smallest absolute t-value. So from the data given the strongest adjusted factor appears to be x1 (shooting advantage) and the weakest appears to be x4 (free throw rate advantage). However, all four factors appear to have a statistically significant relationship with wins after adjustment, so none of them look clearly unimportant.
+
+# Task 3:
+# - Standardize the four predictors
+nba_standardized <- nba_four_factors %>%
+  mutate(
+    z_x1 = as.numeric(scale(x1)),
+    z_x2 = as.numeric(scale(x2)),
+    z_x3 = as.numeric(scale(x3)),
+    z_x4 = as.numeric(scale(x4))
+  )
+
+# - Fit the standardized model
+standardized_model <- lm(wins ~ z_x1 + z_x2 + z_x3 + z_x4, data = nba_standardized)
+
+summary(standardized_model)
+
+# - Rank the factors by absolute standardized coefficient size
+standardized_rankings <- tibble(
+  factor = c("x1", "x2", "x3", "x4"),
+  standardized_term = c("z_x1", "z_x2", "z_x3", "z_x4"),
+  standardized_coefficient = coef(standardized_model)[c("z_x1", "z_x2", "z_x3", "z_x4")]
+) %>%
+  left_join(factor_names, by = "factor") %>%
+  mutate(abs_standardized_coefficient = abs(standardized_coefficient)) %>%
+  arrange(desc(abs_standardized_coefficient))
+
+print(standardized_rankings)
+
+# - Compare the original and standardized models for interpretability
+
+fitted_comparison <- tibble(
+  original_fitted = fitted(four_factors_model),
+  standardized_fitted = fitted(standardized_model),
+  difference = original_fitted - standardized_fitted
+)
+
+print(summary(fitted_comparison$difference))
+cat("\nMaximum absolute fitted-value difference:\n")
+print(max(abs(fitted_comparison$difference)))
+
+# The original model's coefficients are in the units of wins per percentage point of advantage, which may be more directly interpretable for some audiences. The standardized model's coefficients are in units of wins per standard deviation of advantage, which allows for easier comparison of the relative importance of the factors. The standardized coefficients can be directly compared to see which factor has a stronger relationship with wins after accounting for differences in scale. However, the original coefficients may be more intuitive for understanding the practical impact of changes in each factor on wins.
+
+# - Compare fitted values from both models and explain why they match or differ
+
+# The standardized model is easier for comparing relative importance because all predictors are measured in standard deviation units.
+#
+# The original and standardized models should have essentially identical fitted values, up to tiny rounding error. Standardizing predictors changes the scale of the columns, but with an intercept included, the original and standardized design matrices span the same column space. Therefore, the model has access to the same information and produces the same fitted-value space.
+
+
+# Task 4:
+# - Report the residual standard error and interpret it in wins
+rse_four_factors <- summary(four_factors_model)$sigma
+cat("\nResidual standard error for Four Factors model:\n")
+print(rse_four_factors)
+
+# Written interpretation: The residual standard error is measured in wins. It tells us the typical size of the model's prediction errors for team wins. For example, if sigma_hat is about 4, then a typical prediction error is about 4 wins.
+
+# - Report coefficient standard errors and 95% confidence intervals
+coef_table <- as.data.frame(summary(four_factors_model)$coefficients) %>%
+  rownames_to_column("term") %>%
+  rename(
+    estimate = Estimate,
+    std_error = `Std. Error`,
+    t_value = `t value`,
+    p_value = `Pr(>|t|)`
+  )
+
+coef_ci <- as.data.frame(confint(four_factors_model, level = 0.95)) %>%
+  rownames_to_column("term") %>%
+  rename(
+    ci_lower = `2.5 %`,
+    ci_upper = `97.5 %`
+  )
+
+coef_uncertainty <- coef_table %>%
+  left_join(coef_ci, by = "term") %>%
+  mutate(
+    clearly_nonzero = (ci_lower > 0 & ci_upper > 0) | (ci_lower < 0 & ci_upper < 0)
+  )
+
+print(coef_uncertainty)
+
+# - Identify which effects are clearly different from zero
+clear_effects <- coef_uncertainty %>%
+  filter(term != "(Intercept)", clearly_nonzero == TRUE)
+
+uncertain_effects <- coef_uncertainty %>%
+  filter(term != "(Intercept)", clearly_nonzero == FALSE)
+
+cat("\nEffects clearly different from zero:\n")
+print(clear_effects)
+
+cat("\nEffects more uncertain / not clearly different from zero:\n")
+print(uncertain_effects)
+
+
+# - Choose one team and compute a point prediction, confidence interval, and prediction interval
+chosen_team <- nba_four_factors %>%
+  slice(4)
+
+# Point prediction
+chosen_point_prediction <- predict(
+  four_factors_model,
+  newdata = chosen_team
+)
+
+# 95% confidence interval for expected wins
+chosen_expected_ci <- as_tibble(
+  predict(
+    four_factors_model,
+    newdata = chosen_team,
+    interval = "confidence",
+    level = 0.95
+  )
+) %>%
+  rename(
+    expected_fit = fit,
+    expected_ci_lower = lwr,
+    expected_ci_upper = upr
+  )
+
+# 95% prediction interval for actual wins
+chosen_prediction_pi <- as_tibble(
+  predict(
+    four_factors_model,
+    newdata = chosen_team,
+    interval = "prediction",
+    level = 0.95
+  )
+) %>%
+  rename(
+    actual_fit = fit,
+    prediction_pi_lower = lwr,
+    prediction_pi_upper = upr
+  )
+
+chosen_team_results <- bind_cols(
+  chosen_team %>% select(team, season, wins, x1:x4),
+  point_prediction = chosen_point_prediction,
+  chosen_expected_ci,
+  chosen_prediction_pi %>% select(prediction_pi_lower, prediction_pi_upper)
+) %>%
+  mutate(
+    confidence_interval_width = expected_ci_upper - expected_ci_lower,
+    prediction_interval_width = prediction_pi_upper - prediction_pi_lower
+  )
+
+print(chosen_team_results)
+
+# - State which interval is wider and why
+# The prediction interval is wider than the confidence interval. The confidence interval only describes uncertainty in the average/expected number of wins for teams with this four-factor profile. The prediction interval describes uncertainty for one actual team's season, so it includes both uncertainty in the fitted mean and individual season-to-season randomness.
+
+
+
+# Task 5:
+# - Randomly split the data into training and test sets
+set.seed(3)
+
+train_index <- sample(
+  seq_len(nrow(nba_four_factors)),
+  size = floor(0.8 * nrow(nba_four_factors))
+)
+
+nba_train <- nba_four_factors[train_index, ]
+nba_test <- nba_four_factors[-train_index, ]
+
+# - Fit the original and standardized models on the training set
+original_train_model <- lm(wins ~ x1 + x2 + x3 + x4, data = nba_train)
+
+# Standardize predictors using the TRAINING data means and standard deviations.
+x1_mean <- mean(nba_train$x1, na.rm = TRUE)
+x1_sd <- sd(nba_train$x1, na.rm = TRUE)
+
+x2_mean <- mean(nba_train$x2, na.rm = TRUE)
+x2_sd <- sd(nba_train$x2, na.rm = TRUE)
+
+x3_mean <- mean(nba_train$x3, na.rm = TRUE)
+x3_sd <- sd(nba_train$x3, na.rm = TRUE)
+
+x4_mean <- mean(nba_train$x4, na.rm = TRUE)
+x4_sd <- sd(nba_train$x4, na.rm = TRUE)
+
+# Add standardized columns to the training set
+nba_train_std <- nba_train %>%
+  mutate(
+    z_x1 = (x1 - x1_mean) / x1_sd,
+    z_x2 = (x2 - x2_mean) / x2_sd,
+    z_x3 = (x3 - x3_mean) / x3_sd,
+    z_x4 = (x4 - x4_mean) / x4_sd
+  )
+
+# Add the SAME standardized columns to the test set
+nba_test_std <- nba_test %>%
+  mutate(
+    z_x1 = (x1 - x1_mean) / x1_sd,
+    z_x2 = (x2 - x2_mean) / x2_sd,
+    z_x3 = (x3 - x3_mean) / x3_sd,
+    z_x4 = (x4 - x4_mean) / x4_sd
+  )
+
+# Fit the standardized model on the standardized training data
+standardized_train_model <- lm(wins ~ z_x1 + z_x2 + z_x3 + z_x4, data = nba_train_std)
+
+# Predict on the test set
+original_test_predictions <- predict(
+  original_train_model,
+  newdata = nba_test
+)
+
+standardized_test_predictions <- predict(
+  standardized_train_model,
+  newdata = nba_test_std
+)
+
+# - Compute test-set RMSE for both models
+original_rmse <- sqrt(mean((nba_test$wins - original_test_predictions)^2))
+standardized_rmse <- sqrt(mean((nba_test_std$wins - standardized_test_predictions)^2))
+
+# Print RMSE comparison
+rmse_comparison <- tibble(
+  model = c("Original model", "Standardized model"),
+  test_rmse = c(original_rmse, standardized_rmse)
+)
+
+print(rmse_comparison)
+
+# - Compare predictive performance The original and standardized models should have the same or nearly the same test RMSE. Standardizing changes the scale of the predictors, but it does not change the information available to the model. Since both models use the same four factors, their predictive performance should match up to rounding error.
+
+##############
+### PART 2 ###
+##############
+
+# load data
+punts = read_csv("/Users/mackenziebuckner/Desktop/lab-materials/2026/labs/data/02_punts.csv")
+
+# Keep only the variables needed for Part 2 and remove missing values
+punts <- punts %>%
+  drop_na(ydl, next_ydl, punter, pq)
+
+# Pretty graph theme for all Part 2 plots
+theme_lab <- theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 11),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom"
+  )
+
+######################
+### PART 2, TASK 1 ###
+######################
+
+# Scatterplot of post-punt yard line against starting yard line
+ggplot(punts, aes(x = ydl, y = next_ydl)) +
+  geom_point(alpha = 0.15, color = "#2C3E50") +
+  geom_smooth(
+    method = "loess",
+    se = TRUE,
+    color = "#E74C3C",
+    fill = "#E74C3C",
+    alpha = 0.18,
+    linewidth = 1.2
+  ) +
+  labs(
+    title = "Post-Punt Yard Line vs. Starting Yard Line",
+    subtitle = "The smooth curve shows the relationship is not perfectly linear",
+    x = "Starting yard line from opponent's goal line",
+    y = "Post-punt yard line from opponent's perspective"
+  ) +
+  theme_lab
+
+# Bin punts by starting field position
+punts_binned <- punts %>%
+  mutate(
+    ydl_bin = cut(
+      ydl,
+      breaks = seq(0, 100, by = 5),
+      include.lowest = TRUE
+    )
+  ) %>%
+  group_by(ydl_bin) %>%
+  summarise(
+    avg_starting_ydl = mean(ydl),
+    avg_next_ydl = mean(next_ydl),
+    n_punts = n(),
+    .groups = "drop"
+  )
+
+print(punts_binned)
+
+# Plot average post-punt yard line in each bin
+ggplot(punts_binned, aes(x = avg_starting_ydl, y = avg_next_ydl)) +
+  geom_line(color = "#34495E", linewidth = 1) +
+  geom_point(aes(size = n_punts), color = "#2980B9", alpha = 0.85) +
+  scale_size_continuous(range = c(2, 7)) +
+  labs(
+    title = "Average Post-Punt Yard Line by Starting Field Position",
+    subtitle = "Each point represents a 5-yard starting field-position bin",
+    x = "Average starting yard line in bin",
+    y = "Average post-punt yard line",
+    size = "Number of punts"
+  ) +
+  theme_lab
+
+# Summarize distribution of punter quality
+summary(punts$pq)
+
+# Plot distribution of punter quality
+ggplot(punts, aes(x = pq)) +
+  geom_histogram(bins = 30, fill = "#3498DB", color = "white", alpha = 0.9) +
+  geom_vline(
+    aes(xintercept = mean(pq)),
+    color = "#E74C3C",
+    linewidth = 1.1,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Distribution of Punter Quality",
+    subtitle = "Dashed line shows average punter quality",
+    x = "Punter quality",
+    y = "Count"
+  ) +
+  theme_lab
+
+# Written response for Task 1:
+# The relationship between starting yard line and post-punt yard line does not look perfectly linear. It bends because punts from different parts of the field have different constraints. When teams punt closer to the opponent's end zone, the punter has less space, touchbacks become more likely, and the expected post-punt yard line cannot keep improving at the same linear rate.
+
+######################
+### PART 2, TASK 2 ###
+######################
+
+# Randomly split data into training and test sets
+set.seed(3)
+
+train_index <- sample(
+  seq_len(nrow(punts)),
+  size = floor(0.8 * nrow(punts))
+)
+
+punts_train <- punts[train_index, ]
+punts_test <- punts[-train_index, ]
+
+# Model 1: Linear model
+# E[next_ydl | ydl] = beta0 + beta1 * ydl
+linear_punt_model <- lm(next_ydl ~ ydl, data = punts_train)
+
+# Model 2: Quadratic model
+# E[next_ydl | ydl] = beta0 + beta1 * ydl + beta2 * ydl^2
+quadratic_punt_model <- lm(next_ydl ~ ydl + I(ydl^2), data = punts_train)
+
+# Model 3: Quadratic model plus punter quality
+# E[next_ydl | ydl, pq] = beta0 + beta1 * ydl + beta2 * ydl^2 + gamma * pq
+quadratic_pq_punt_model <- lm(next_ydl ~ ydl + I(ydl^2) + pq, data = punts_train)
+
+# View model summaries
+summary(linear_punt_model)
+summary(quadratic_punt_model)
+summary(quadratic_pq_punt_model)
+
+# Helper function to calculate RMSE
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+# Predict on test set
+linear_predictions <- predict(linear_punt_model, newdata = punts_test)
+quadratic_predictions <- predict(quadratic_punt_model, newdata = punts_test)
+quadratic_pq_predictions <- predict(quadratic_pq_punt_model, newdata = punts_test)
+
+# Compare test-set RMSE
+punt_rmse <- tibble(
+  model = c(
+    "Linear",
+    "Quadratic",
+    "Quadratic + Punter Quality"
+  ),
+  test_rmse = c(
+    rmse(punts_test$next_ydl, linear_predictions),
+    rmse(punts_test$next_ydl, quadratic_predictions),
+    rmse(punts_test$next_ydl, quadratic_pq_predictions)
+  )
+) %>%
+  arrange(test_rmse)
+
+print(punt_rmse)
+
+# Select the model with the lowest test-set RMSE
+selected_model_name <- punt_rmse %>%
+  slice(1) %>%
+  pull(model)
+
+print(selected_model_name)
+
+# Store selected model in a simple object
+selected_punt_model <- case_when(
+  selected_model_name == "Linear" ~ "linear",
+  selected_model_name == "Quadratic" ~ "quadratic",
+  selected_model_name == "Quadratic + Punter Quality" ~ "quadratic_pq"
+)
+
+# Assess whether punter quality improves out-of-sample prediction
+pq_improvement <- punt_rmse %>%
+  filter(model %in% c("Quadratic", "Quadratic + Punter Quality")) %>%
+  select(model, test_rmse)
+
+print(pq_improvement)
+
+# Create a grid of ydl values for plotting fitted curves.
+# pq is included at its average value so the quadratic + pq model can be plotted.
+plot_grid <- tibble(
+  ydl = seq(min(punts$ydl), max(punts$ydl), length.out = 250),
+  pq = mean(punts$pq)
+)
+
+# Add fitted values from each model
+punt_curves <- plot_grid %>%
+  mutate(
+    Linear = predict(linear_punt_model, newdata = plot_grid),
+    Quadratic = predict(quadratic_punt_model, newdata = plot_grid),
+    `Quadratic + Punter Quality` = predict(quadratic_pq_punt_model, newdata = plot_grid)
+  ) %>%
+  pivot_longer(
+    cols = c(Linear, Quadratic, `Quadratic + Punter Quality`),
+    names_to = "model",
+    values_to = "predicted_next_ydl"
+  )
+
+# Plot fitted curves
+ggplot() +
+  geom_point(
+    data = punts,
+    aes(x = ydl, y = next_ydl),
+    alpha = 0.08,
+    color = "#2C3E50"
+  ) +
+  geom_line(
+    data = punt_curves,
+    aes(x = ydl, y = predicted_next_ydl, color = model),
+    linewidth = 1.25
+  ) +
+  scale_color_manual(
+    values = c(
+      "Linear" = "#7F8C8D",
+      "Quadratic" = "#2980B9",
+      "Quadratic + Punter Quality" = "#27AE60"
+    )
+  ) +
+  labs(
+    title = "Fitted Punt Models",
+    subtitle = "Comparing linear, quadratic, and quadratic plus punter quality models",
+    x = "Starting yard line from opponent's goal line",
+    y = "Predicted post-punt yard line",
+    color = "Model"
+  ) +
+  theme_lab
+
+# Interpret punter-quality coefficient
+pq_coefficient <- coef(quadratic_pq_punt_model)["pq"]
+print(pq_coefficient)
+
+# Written response for Task 2:
+# The linear model is easiest to interpret, but it forces the relationship to be a straight line. The quadratic model is more flexible because it allows the relationship between starting yard line and post-punt yard line to bend. The quadratic + punter quality model adds information about the punter.
+
+# To choose a preferred model, compare the test RMSE values. The model with the lowest test RMSE predicts best on the held-out test set.
+# To decide whether punter quality improves prediction, compare the test RMSE of the quadratic model and the quadratic + punter quality model. If the quadratic + punter quality model has a lower test RMSE, then adding punter quality improved out-of-sample prediction.
+# The coefficient on pq tells us the predicted change in opponent's next yard line for a one-unit increase in punter quality, holding starting yard line constant. Since a smaller opponent yard line is better for the punting team, a negative pq coefficient would mean higher punter quality leads to better punts.
+
+######################
+### PART 2, TASK 3 ###
+######################
+
+if (selected_punt_model == "linear") {
+  final_punt_model <- lm(next_ydl ~ ydl, data = punts)
+}
+
+if (selected_punt_model == "quadratic") {
+  final_punt_model <- lm(next_ydl ~ ydl + I(ydl^2), data = punts)
+}
+
+if (selected_punt_model == "quadratic_pq") {
+  final_punt_model <- lm(next_ydl ~ ydl + I(ydl^2) + pq, data = punts)
+}
+
+summary(final_punt_model)
+
+# Residual standard error for selected punt model
+punt_rse <- summary(final_punt_model)$sigma
+
+cat("\nResidual standard error for selected punt model:\n")
+print(punt_rse)
+
+# Written interpretation: The residual standard error is measured in yards of field position. It tells us the typical size of the model's prediction errors for post-punt yard line.
+
+# Create grid for confidence and prediction intervals
+uncertainty_grid <- tibble(
+  ydl = seq(min(punts$ydl), max(punts$ydl), length.out = 250),
+  pq = mean(punts$pq)
+)
+
+# 95% confidence interval for expected response
+confidence_band <- as_tibble(
+  predict(
+    final_punt_model,
+    newdata = uncertainty_grid,
+    interval = "confidence",
+    level = 0.95
+  )
+) %>%
+  rename(
+    fitted_mean = fit,
+    conf_lower = lwr,
+    conf_upper = upr
+  )
+
+# 95% prediction interval for one individual punt
+prediction_band <- as_tibble(
+  predict(
+    final_punt_model,
+    newdata = uncertainty_grid,
+    interval = "prediction",
+    level = 0.95
+  )
+) %>%
+  rename(
+    prediction_fit = fit,
+    pred_lower = lwr,
+    pred_upper = upr
+  )
+
+# Combine results
+punt_uncertainty <- bind_cols(
+  uncertainty_grid,
+  confidence_band,
+  prediction_band %>% select(pred_lower, pred_upper)
+) %>%
+  mutate(
+    confidence_width = conf_upper - conf_lower,
+    prediction_width = pred_upper - pred_lower
+  )
+
+# Plot fitted mean response with confidence and prediction bands
+ggplot(punt_uncertainty, aes(x = ydl)) +
+  geom_ribbon(
+    aes(ymin = pred_lower, ymax = pred_upper, fill = "95% prediction band"),
+    alpha = 0.16
+  ) +
+  geom_ribbon(
+    aes(ymin = conf_lower, ymax = conf_upper, fill = "95% confidence band"),
+    alpha = 0.35
+  ) +
+  geom_line(aes(y = fitted_mean), color = "#2C3E50", linewidth = 1.25) +
+  scale_fill_manual(
+    values = c(
+      "95% confidence band" = "#3498DB",
+      "95% prediction band" = "#95A5A6"
+    )
+  ) +
+  labs(
+    title = "Selected Punt Model with Uncertainty Bands",
+    subtitle = paste("Selected model:", selected_model_name),
+    x = "Starting yard line from opponent's goal line",
+    y = "Predicted post-punt yard line",
+    fill = "Interval"
+  ) +
+  theme_lab
+
+# Find where the model is most uncertain
+most_uncertain_points <- punt_uncertainty %>%
+  arrange(desc(confidence_width)) %>%
+  slice(1:10)
+
+print(most_uncertain_points)
+
+# Optional: compare uncertainty to where punts are most/least common
+uncertainty_by_bin <- punts %>%
+  mutate(
+    ydl_bin = cut(
+      ydl,
+      breaks = seq(0, 100, by = 5),
+      include.lowest = TRUE
+    )
+  ) %>%
+  group_by(ydl_bin) %>%
+  summarise(
+    avg_ydl = mean(ydl),
+    n_punts = n(),
+    .groups = "drop"
+  )
+
+ggplot(uncertainty_by_bin, aes(x = avg_ydl, y = n_punts)) +
+  geom_col(fill = "#3498DB", alpha = 0.85) +
+  labs(
+    title = "Number of Punts by Starting Field Position",
+    subtitle = "The model is often more uncertain where there are fewer punts",
+    x = "Average starting yard line in bin",
+    y = "Number of punts"
+  ) +
+  theme_lab
+
+# Written response for Task 3: The prediction band is wider than the confidence band because the confidence band only describes uncertainty in the expected average response. The prediction band describes uncertainty for one individual punt, so it includes both model uncertainty and punt-to-punt randomness. The model is usually most uncertain near the edges of the data or in parts of the field with fewer punts.
+
+######################
+### PART 2, TASK 4 ###
+######################
+
+# Punt Yards Over Expected:
+# PYOE = expected next yard line - actual next yard line
+# This sign convention means positive values are better punts. A positive value means the opponent ended up with worse field position than expected.
+
+punts_with_pyoe <- punts %>%
+  mutate(
+    expected_next_ydl = predict(final_punt_model, newdata = punts),
+    pyoe = expected_next_ydl - next_ydl
+  )
+
+# Compute average PYOE, number of punts, and standard error for each punter
+punter_rankings <- punts_with_pyoe %>%
+  group_by(punter) %>%
+  summarise(
+    avg_pyoe = mean(pyoe),
+    n_punts = n(),
+    sd_pyoe = sd(pyoe),
+    se_avg_pyoe = sd_pyoe / sqrt(n_punts),
+    ci_lower = avg_pyoe - 1.96 * se_avg_pyoe,
+    ci_upper = avg_pyoe + 1.96 * se_avg_pyoe,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(avg_pyoe)) %>%
+  mutate(
+    rank = row_number(),
+    clearly_above_average = ci_lower > 0,
+    clearly_below_average = ci_upper < 0,
+    unstable_ranking = ci_lower < 0 & ci_upper > 0
+  )
+
+print(punter_rankings)
+
+# Punters who look clearly above average
+clearly_above_average <- punter_rankings %>%
+  filter(clearly_above_average == TRUE)
+
+print(clearly_above_average)
+
+# Rankings that are unstable
+unstable_rankings <- punter_rankings %>%
+  filter(unstable_ranking == TRUE)
+
+print(unstable_rankings)
+
+# Plot punter rankings with uncertainty intervals
+# Keeping only punters with at least 20 punts makes the plot easier to read.
+punter_rankings_plot <- punter_rankings %>%
+  filter(n_punts >= 20) %>%
+  arrange(avg_pyoe)
+
+ggplot(
+  punter_rankings_plot,
+  aes(x = reorder(punter, avg_pyoe), y = avg_pyoe)
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "#7F8C8D",
+    linewidth = 0.9
+  ) +
+  geom_errorbar(
+    aes(ymin = ci_lower, ymax = ci_upper),
+    width = 0.2,
+    color = "#34495E"
+  ) +
+  geom_point(aes(color = clearly_above_average), size = 2.8) +
+  scale_color_manual(
+    values = c("TRUE" = "#27AE60", "FALSE" = "#2980B9"),
+    labels = c("Not clearly above average", "Clearly above average")
+  ) +
+  coord_flip() +
+  labs(
+    title = "Punter Rankings by Average Punt Yards Over Expected",
+    subtitle = "Approximate 95% intervals shown; only punters with at least 20 punts included",
+    x = "Punter",
+    y = "Average PYOE",
+    color = ""
+  ) +
+  theme_lab
+
+# Written response for Task 4:
+# Punters with intervals entirely above 0 look clearly above average. Punters with intervals crossing 0 are harder to distinguish from average. Rankings are unstable when a punter has a small sample size or a large standard error because the estimated average PYOE could change a lot with more punts.
+
+########################
+### FINAL REFLECTION ###
+########################
+
+# Adding columns to the design matrix changed what the model could fit. The linear model could only fit a straight-line relationship, while the quadratic model could fit a curved relationship. Adding punter quality allowed the model to account for differences between punters.
+# Extra flexibility helped if the true relationship between starting yard line and post-punt yard line was curved. However, flexibility can hurt when the model starts fitting noise instead of real signal, which is why test-set RMSE is useful.
+# The residual standard error tells us the typical size of prediction errors in yards of field position. A prediction interval is wider than a confidence interval because it includes both uncertainty in the expected response and the randomness of one individual punt.
+# I would be cautious about interpreting punter rankings too strongly when the punter has few punts or when the uncertainty interval crosses 0.
+
+```
