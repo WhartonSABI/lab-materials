@@ -146,7 +146,7 @@ model_orig <- lm(W ~ x1 + x2 + x3 + x4, data = train)
 for (v in c("x1","x2","x3","x4")) {
   mu <- mean(train[[v]]); s <- sd(train[[v]])
   train[[paste0("z", substr(v,2,2))]] <- (train[[v]] - mu) / s
-  test [[paste0("z", substr(v,2,2))]] <- (test [[v]] - mu) / s   # same mu, s!
+  test [[paste0("z", substr(v,2,2))]] <- (test [[v]] - mu) / s
 }
 model_std <- lm(W ~ z1 + z2 + z3 + z4, data = train)
 
