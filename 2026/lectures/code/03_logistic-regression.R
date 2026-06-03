@@ -63,9 +63,9 @@ grid$p_hat = plogis(grid$eta_hat)
 grid$p_low = plogis(grid$eta_hat - 1.96 * grid$se_eta)
 grid$p_high = plogis(grid$eta_hat + 1.96 * grid$se_eta)
 
-# quadratic logistic regression on log distance
+# cubic logistic regression on log distance
 model_4 = glm(
-    putt_made ~ log_distance + I(log_distance^2),
+    putt_made ~ log_distance + I(log_distance^2) + I(log_distance^3),
     data = putt_data,
     family = "binomial"
 )
