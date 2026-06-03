@@ -212,7 +212,52 @@ ggplot(punts, aes(x = ydl, y = next_ydl)) +
   labs(title = "Punt Model: Fitted Mean with Confidence and Prediction Bands",
        x = "Starting Yard Line", y = "Post-Punt Yard Line",
        caption = "Blue = 95% CI for mean, Red = 95% Prediction Interval")
-#The prediction band is wider for the confidence band because 
+#The prediction band is wider for the confidence band because the confidence band just captures the mean response whereas the prediciton band adds the punt to punt randomness of an individuals too. 
+#The model is most uncertain where there is less data so where there are extremes (less data)
 
+# Compute PYOE for each punt
+punts <- punts %>%
+  mutate(
+    fitted = predict(punt_model3),
+    PYOE = fitted - next_ydl
+  )
+
+# Summarize by punter
+punter_summary <- punts %>%
+  group_by(punter) %>%
+  summarise(
+    avg_PYOE = mean(PYOE),
+    n_punts = n(),
+    se_PYOE = sd(PYOE) / sqrt(n())
+  ) %>%
+  arrange(desc(avg_PYOE))
+
+punter_summary
+
+# Visualize rankings with uncertainty intervals
+ggplot(punter_summary, aes(x = reorder(punter, avg_PYOE), y = avg_PYOE)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = avg_PYOE - 1.96 * se_PYOE, 
+                    ymax = avg_PYOE + 1.96 * se_PYOE), width = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Punter Rankings by PYOE with Uncertainty",
+       x = "Punter", y = "Average PYOE")
+#There are some putters that are clearly above average, but some of the clearly above average punters only had 1 or 2 punts. HOwever there are some like Redfern who had 10 and are clearly above average. 
+#Roethlisberger and Novak only have 1 punt and an NA standard error and are unstable because of small sample size. 
+
+#Final Reflection
+#1 How did adding columns to the design matrix change what the model could fit?
+#Adding columns to the design allows for the model to fit in more directions. 
+#2 When did extra flexibility help?
+#Extra flexibility helps when it is nonlinear when the true relationship is nonlinear.
+#3 When might extra flexibility hurt?
+#Extra flexibility can lead to over fitting, and is less interpretable unit wise compared to simple linear regression.
+#4 what does sigma hat tell you about the typical size of model errors?
+#it tells you the typical size of the model's error in the original units (wins for NBA model and yards for the punt model)
+#5 Why is a prediction interval wider than a confidence interval for the expected response?
+#prediction interval is wider than a confidence interval for the expected response because confidence interval considers the average whereas the prediction interval also considers the randomness of the outcome of an individual season for a specific team.
+#6 What is one coefficient, prediction, or punter ranking from this lab that you would be cautious about interpreting too strongly?
+#The punter rankings with small sample sizes like Roethlisberger. 
 
   
