@@ -10,17 +10,26 @@ internal/
 #############
 
 
-*.docx
-template*
-*.tex
+
+
+# finder
 *.DS_Store
-.RDataTmp*
 
 # later lectures and labs
 2026/**/[0-9][4-9]*
 2026/**/[1-9][0-9]*
 
+# latex source
+*.tex
 
+# templates
+template*
+
+# temporary files
+tmp/
+
+# word documents
+*.docx
 
 ##############
 ### PYTHON ###

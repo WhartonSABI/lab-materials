@@ -11,7 +11,8 @@ library(tidyverse)
 ##############
 
 # load team-season data
-mlb_team_seasons = read_csv("../data/01_mlb-team-seasons.csv")
+library(here)
+mlb_team_seasons = read_csv(here("2026/labs/data/01_mlb-team-seasons.csv"))
 
 # transform variables used in the Pythagorean exponent model
 pythag_data = mlb_team_seasons %>%
@@ -88,7 +89,7 @@ ggplot(data = pythag_data, aes(x = wp_hat_alpha, y = resid_alpha)) +
 ##############
 
 # load payroll data
-mlb_payrolls = read_csv("../data/01_mlb-payrolls.csv")
+mlb_payrolls = read_csv(here("2026/labs/data/01_mlb-payrolls.csv"))
 
 # remove 2020 covid-shortened season
 payroll_data = mlb_payrolls %>%
