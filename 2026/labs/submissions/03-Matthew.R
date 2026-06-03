@@ -224,6 +224,8 @@ ncaab_team_info = read_csv("../data/03_ncaab-teams.csv")
 # - Recode the data into a Bradley-Terry model dataset
 # - Make sure you can identify the home team, away team, and binary game outcome
 # - State the identifiability convention you will use for team ratings
+ncaa_results_clean<- ncaab_results|>
+  filter(Season==2024)
 teams_vec <- sort(unique(c(ncaa_results_clean$WTeamID,
                            ncaa_results_clean$LTeamID)))
 
@@ -390,3 +392,4 @@ data.frame(
   ML_Lower = lower_ml,
   ML_Upper = upper_ml
 )
+

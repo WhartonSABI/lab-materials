@@ -228,14 +228,22 @@ predict(m3, one_punt, interval = "prediction") #[58.68, 101.05]
 #prediction interval is wider because there is additional residual variance for predicting individual team performance on top of uncertainty in the mean
 
 ci <- predict(m3, newdata = grid, interval = "confidence", level = 0.95)
-grid_ci <- grid %>%
-  mutate(fit = ci[, "fit"], lwr = ci[, "lwr"], upr = ci[, "upr"])
-ggplot(grid_ci, aes(x = ydl)) +
+
+pi <- predict(m3, newdata = grid, interval = "prediction", level = 0.95)
+
+grid_bands <- grid %>%
+  mutate(
+    fit     = ci[, "fit"],
+    ci_lwr  = ci[, "lwr"], ci_upr  = ci[, "upr"],
+    pi_lwr  = pi[, "lwr"], pi_upr  = pi[, "upr"]
+  )
+
+ggplot(grid_bands, aes(x = ydl)) +
   geom_point(data = punts, aes(ydl, next_ydl), alpha = 0.05) +
-  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "steelblue", alpha = 0.3) +
-  geom_line(aes(y = fit), color = "steelblue", linewidth = 1) +
-  labs(x = "starting yard line (ydl)", y = "post-punt yard line")
-#the band seems to widen at closer to ydl due to fewer punts
+  geom_ribbon(aes(ymin = pi_lwr, ymax = pi_upr), fill = "orange",    alpha = 0.25) +  # wide
+  geom_ribbon(aes(ymin = ci_lwr, ymax = ci_upr), fill = "steelblue", alpha = 0.6)  +  # thin
+  geom_line(aes(y = fit), color = "steelblue", linewidth = 1)
+#the bands seem to widen at closer to ydl due to fewer punts
 
 punts <- punts %>%
   mutate(
