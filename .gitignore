@@ -19,16 +19,6 @@ internal/
 # latex source
 *.tex
 
-# keep day 4 materials tracked
-!2026/lectures/04_*
-!2026/lectures/code/04_*
-!2026/lectures/data/04_*
-!2026/lectures/figures/04_*
-!2026/labs/04_*
-!2026/labs/starter-code/04_*
-!2026/labs/data/04_*
-!2026/labs/figures/04_*
-
 # templates
 template*
 
