@@ -1,0 +1,427 @@
+% Page setup
+\documentclass[twoside]{article}
+\setlength{\oddsidemargin}{0 in}
+\setlength{\evensidemargin}{0 in}
+\setlength{\topmargin}{-0.6 in}
+\setlength{\textwidth}{6.5 in}
+\setlength{\textheight}{8.5 in}
+\setlength{\headsep}{0.75 in}
+\setlength{\parindent}{0 in}
+\setlength{\parskip}{0.1 in}
+
+% Essential packages
+\usepackage{amsmath,amsfonts,amsthm,graphicx,bm,bbm}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{footmisc}
+\usepackage{color}
+\usepackage{booktabs}
+\renewcommand{\thefootnote}{\alph{footnote}}
+
+% Counter setup for lecture numbering
+\newcounter{lecnum}
+\renewcommand{\thepage}{\thelecnum-\arabic{page}}
+\renewcommand{\thesection}{\thelecnum.\arabic{section}}
+\renewcommand{\theequation}{\thelecnum.\arabic{equation}}
+\renewcommand{\thefigure}{\thelecnum.\arabic{figure}}
+\renewcommand{\thetable}{\thelecnum.\arabic{table}}
+\renewcommand{\theHsection}{\thelecnum.\arabic{section}}
+\renewcommand{\theHsubsection}{\thelecnum.\arabic{section}.\arabic{subsection}}
+\renewcommand{\theHequation}{\thelecnum.\arabic{equation}}
+\renewcommand{\theHfigure}{\thelecnum.\arabic{figure}}
+\renewcommand{\theHtable}{\thelecnum.\arabic{table}}
+
+% Lecture header command
+\newcommand{\lecture}[6]{
+   \pagestyle{myheadings}
+   \thispagestyle{plain}
+   \newpage
+   \setcounter{lecnum}{#1}
+   \setcounter{page}{1}
+   \noindent
+   \begin{center}
+   \framebox{
+      \vbox{\vspace{2mm}
+    \hbox to 6.28in { {\bf #3 \hfill #4} }
+       \vspace{4mm}
+       \hbox to 6.28in { {\Large \hfill Lecture #1: #2  \hfill} }
+       \vspace{2mm}
+       \hbox to 6.28in { {\it Instructor: #5 \hfill Authors: #6} }
+      \vspace{2mm}}
+   }
+   \end{center}
+   \markboth{Lecture #1: #2}{Lecture #1: #2}
+}
+
+% Citation and reference commands
+\renewcommand{\cite}[1]{[#1]}
+\def\beginrefs{\begin{list}%
+        {[\arabic{equation}]}{\usecounter{equation}
+         \setlength{\leftmargin}{2.0truecm}\setlength{\labelsep}{0.4truecm}%
+         \setlength{\labelwidth}{1.6truecm}}}
+\def\endrefs{\end{list}}
+\def\bibentry#1{\item[\hbox{[#1]}]}
+
+% Figure command
+\newcommand{\fig}[3]{
+\vspace{#2}
+\begin{center}
+Figure \thelecnum.#1:~#3
+\end{center}
+}
+
+% Theorem environments
+\newtheorem{theorem}{Theorem}[lecnum]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{claim}[theorem]{Claim}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{definition}
+\newtheorem{example}[theorem]{Example}{\normalfont}
+
+% Common math symbols
+\renewcommand{\P}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\logit}{\operatorname{logit}}
+\newcommand{\iid}{\stackrel{\mathrm{iid}}{\sim}}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false
+}
+
+\begin{document}
+
+\lecture{4}{From GLMs to GAMs}{WSABI Summer Research Lab}{Summer 2026}{Jonathan Pipping-Gam\'{o}n}{JP}
+
+\section{The Regression Template So Far}
+
+In the first three lectures, we kept returning to the same basic regression template:
+\begin{enumerate}
+    \item Identify a response variable
+    \item Write down a conditional mean
+    \item Fit the model
+    \item Interpret the fitted values
+    \item Check whether the model is appropriate for the kind of outcome we have.
+\end{enumerate}
+
+Lecture 1 used ordinary linear regression for real-valued outcomes. Lecture 2 extended this to multiple covariates and showed that a model can still be linear in its coefficients even when we add transformed predictors such as $x_i^2$ or spline basis functions. Lecture 3 introduced logistic regression, where the response is binary and the fitted value must be a probability.
+
+This lecture puts those ideas under two umbrellas:
+\begin{itemize}
+    \item[-] \textbf{Generalized linear models (GLMs)} change the response distribution and the scale on which the mean is modeled.
+    \item[-] \textbf{Generalized additive models (GAMs)} keep the response model but replace selected straight-line terms with smooth functions learned from the data.
+\end{itemize}
+
+The central question is broader than ``is the relationship linear?'' It is:
+\begin{quote}
+    What kind of response are we modeling, and how flexible should the conditional mean be?
+\end{quote}
+
+This question comes up constantly in sports analytics. Score margins, made/missed shots, and goal counts are all natural regression targets, but they call for different response models and, in some cases, different amounts of flexibility in the mean function.
+
+\section{Generalized Linear Models}
+
+\begin{definition}[Generalized Linear Model]
+A generalized linear model has three ingredients:
+\begin{enumerate}
+    \item a response distribution for $Y_i \mid x_i$, with conditional mean
+    \[
+        \mu_i = \E[Y_i \mid x_i];
+    \]
+    \item a linear predictor
+    \[
+        \eta_i = x_i^T\beta;
+    \]
+    \item a link function $g$ that connects the conditional mean to the linear predictor:
+    \[
+        g(\mu_i) = \eta_i.
+    \]
+\end{enumerate}
+\end{definition}
+
+These models are still linear in the coefficients $\beta$, but the fitted mean may be nonlinear on the original response scale because we may transform it through a link function. Table \ref{tab:glm-families} demonstrates three different response models and corresponding link functions.
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lll}
+        \toprule
+        Response type & Mean model & Common GLM form \\
+        \midrule
+        Real-valued & $\mu_i = \E[Y_i \mid x_i]$ & $\mu_i = x_i^T\beta$ \\
+        Binary & $p_i = \P(Y_i = 1 \mid x_i)$ & $\logit(p_i) = x_i^T\beta$ \\
+        Count & $\lambda_i = \E[Y_i \mid x_i]$ & $\log(\lambda_i) = x_i^T\beta$ \\
+        \bottomrule
+\end{tabular}
+    \caption{Three common GLMs. Ordinary linear regression is the Gaussian model with identity link. Logistic regression is the Bernoulli/binomial model with logit link. Poisson regression is a count model with log link.}
+    \label{tab:glm-families}
+\end{table}
+
+Multinomial logistic regression is another GLM. It extends binary logistic regression to unordered categorical responses with more than two classes by modeling several log-odds ratios relative to a reference category.
+
+In Lectures 1 and 2, we mainly modeled the conditional mean as a linear function of predictors. To place that framework inside the GLM family, we now add a full response distribution; the corresponding classical case is the Gaussian model with identity link.
+
+\subsection{Gaussian GLMs}
+
+If $Y_i$ is real-valued and the remaining noise is approximately Gaussian, then the usual linear regression model can be written as a Gaussian GLM:
+\begin{align*}
+    Y_i \mid x_i &\sim N(\mu_i, \sigma^2), \\
+    \mu_i &= x_i^T\beta.
+\end{align*}
+The link function is the \textbf{identity link},
+\[
+    g(\mu_i) = \mu_i.
+\]
+So the mean itself is modeled as a linear function of the predictors.
+
+\subsubsection*{Example: NFL Score Differential}
+
+A classic example is \textbf{score differential (spread) in football}. Let
+\[
+    Y_i = \text{home points}_i - \text{away points}_i.
+\]
+A first model might be
+\[
+    Y_i \mid x_i \sim N(\mu_i, \sigma^2), \qquad
+    \mu_i = \beta_0 + \alpha_{\text{home}(i)} - \alpha_{\text{away}(i)} + \gamma\,\text{rest diff}_i.
+\]
+Here $\alpha_{\text{home}(i)}$ and $\alpha_{\text{away}(i)}$ are team-strength terms, $\beta_0$ captures the baseline home-edge intercept, and $\text{rest diff}_i$ measures relative rest. Because the link is the identity link, coefficients are interpreted directly on the score-margin scale. If $\gamma = 0.8$, then one extra day of rest relative to the opponent is associated with about $0.8$ additional expected points of margin.
+
+\subsection{Bernoulli GLMs}
+
+If $Y_i$ is binary, the natural target is a success probability
+\[
+    p_i = \P(Y_i = 1 \mid x_i).
+\]
+A Bernoulli GLM with \textbf{logit link} is
+\begin{align*}
+    Y_i \mid x_i &\sim \operatorname{Bernoulli}(p_i), \\
+    \logit(p_i) &= x_i^T\beta.
+\end{align*}
+This is logistic regression.
+
+\subsubsection*{Example: Hockey Shot xG}
+
+For example, suppose $Y_i = 1$ if hockey shot $i$ becomes a goal and $Y_i = 0$ otherwise. Then we can model the scoring probability from preshot features such as distance, angle, rebound status, and rush status:
+\begin{align*}
+    Y_i \mid x_i &\sim \operatorname{Bernoulli}(p_i), \\
+    \logit(p_i) &= \beta_0 + \beta_1\,\text{distance}_i + \beta_2\,\text{angle}_i + \beta_3\,\text{rebound}_i + \beta_4\,\text{rush}_i.
+\end{align*}
+The fitted values stay in $[0,1]$. The coefficients describe how the log odds of scoring change as those preshot features change, and their exponentiated versions are odds ratios. Once we fit the model, the fitted probability $\hat p_i$ is the shot's \textbf{expected goals value}, or \textbf{xG}. So in this example logistic regression is the tool that produces xG, not something that takes xG as an input.
+
+\subsection{Poisson GLMs}
+
+If the response is a nonnegative count, a common starting point is a \textbf{Poisson GLM}:
+\begin{align*}
+    Y_i \mid x_i &\sim \operatorname{Poisson}(\lambda_i), \\
+    \log(\lambda_i) &= x_i^T\beta.
+\end{align*}
+The \textbf{log link} ensures that the fitted mean $\lambda_i$ is positive.
+
+\subsubsection*{Example: Soccer Goals and Goal Differential}
+
+A natural sports example is \textbf{soccer goals by team}. If match $i$ has home team $h(i)$ and away team $a(i)$, one simple model is
+\begin{align*}
+    G_{h,i} &\sim \operatorname{Poisson}(\lambda_{h,i}), \\
+    G_{a,i} &\sim \operatorname{Poisson}(\lambda_{a,i}), \\
+    \log(\lambda_{h,i}) &= \beta_0 + A_{h(i)} - D_{a(i)} + H, \\
+    \log(\lambda_{a,i}) &= \beta_0 + A_{a(i)} - D_{h(i)}.
+\end{align*}
+Here $A_t$ is team $t$'s attacking effect, $D_t$ is team $t$'s defensive effect, and $H$ is home-field advantage. Larger $A_t$ means stronger attack; larger $D_t$ means stronger defense, so it lowers the opponent's expected goals through the minus sign. As with team-rating models, these effects require an identifiability convention, such as sum-to-zero constraints on the attacking and defensive effects or a reference-team parameterization.
+
+Because the link is logarithmic, coefficients are multiplicative on the expected-count scale. Adding $0.2$ to the linear predictor multiplies expected goals by
+\[
+    e^{0.2} \approx 1.22.
+\]
+So a $0.2$ home-field effect would correspond to roughly $22\%$ higher expected goals for the home team, all else equal.
+
+If we care about \emph{goal differential} rather than home and away goal counts separately, define
+\[
+    M_i = G_{h,i} - G_{a,i}.
+\]
+Under the conditional-independence assumption above,
+\[
+    M_i \mid x_i \sim \operatorname{Skellam}(\lambda_{h,i}, \lambda_{a,i}).
+\]
+So the same setup gives us both:
+\begin{itemize}
+    \item[-] A two-Poisson model for home and away goals;
+    \item[-] An implied spread model for the final margin $M_i$.
+\end{itemize}
+That is often the cleanest way to move from expected goals to win/draw/loss probabilities or a full distribution over soccer scorelines.
+
+The Poisson model is a useful starting point, but it assumes the conditional variance equals the conditional mean. Real count data are often overdispersed, meaning the variance is larger than the Poisson model expects. That is a model-checking issue, and it motivates alternatives such as quasi-Poisson or negative binomial regression.
+
+\section{Estimation and Interpretation in GLMs}
+
+For Gaussian linear regression, least squares and maximum likelihood lead to the same fitted coefficients under the usual normal-error model. For logistic and Poisson regression, we usually estimate $\beta$ by maximum likelihood. In \texttt{R}, the basic workflow is \texttt{glm()}:
+\begin{lstlisting}[language=R]
+# binary response
+shot_glm = glm(goal ~ distance + angle + rebound + rush,
+               data = shot_data,
+               family = binomial(link = "logit"))
+
+# count responses
+home_goals_glm = glm(home_goals ~ home_team + away_team + home,
+                     data = match_data,
+                     family = poisson(link = "log"))
+
+away_goals_glm = glm(away_goals ~ away_team + home_team,
+                     data = match_data,
+                     family = poisson(link = "log"))
+\end{lstlisting}
+
+The main interpretation rule is:
+\begin{quote}
+    GLM coefficients live on the link scale. Transform them back only after remembering what the link function is.
+\end{quote}
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lll}
+        \toprule
+        Link & Coefficient interpretation & Transformed interpretation \\
+        \midrule
+        Identity & additive change in mean & already on response scale \\
+        Logit & additive change in log odds & $e^{\beta_j}$ is an odds ratio \\
+        Log & additive change in log mean & $e^{\beta_j}$ is a multiplicative factor \\
+        \bottomrule
+    \end{tabular}
+    \caption{Coefficient interpretations depend on the link function, not just on the linear predictor.}
+    \label{tab:link-interpretation}
+\end{table}
+
+This is why the same expression $x_i^T\beta$ can mean different things across models. In linear regression, $x_i^T\beta$ is the fitted mean itself. In logistic regression, it is the fitted log odds. In Poisson regression, it is the fitted log mean.
+
+\section{Generalized Additive Models}
+
+\subsection{From Linear Terms to Smooth Terms}
+
+GLMs still require us to choose a functional form for the linear predictor. Lecture 2 handled curvature by manually adding columns to the design matrix: $x_i^2$, spline basis functions, and so on. Lecture 3 did the same thing on the log-odds scale by adding polynomial terms in log distance.
+
+A \textbf{generalized additive model} keeps the GLM response distribution and link function, but replaces some linear terms with smooth functions:
+\[
+    g(\mu_i) = \beta_0 + f_1(x_{i1}) + f_2(x_{i2}) + \cdots + f_p(x_{ip}).
+\]
+Each $f_j$ is learned from the data, subject to a smoothness penalty. The model is still additive because the smooth components are added together.
+
+For a binary response, a GAM can still use the binomial distribution and logit link:
+\[
+    \logit\!\left(\P(Y_i = 1 \mid x_i)\right) = \beta_0 + f(x_i).
+\]
+For a count response, a GAM can use the Poisson distribution and log link:
+\[
+    \log(\lambda_i) = \beta_0 + f(x_i).
+\]
+
+The connection to the previous lectures is direct. Instead of deciding by hand whether the model should contain $x$, $x^2$, $x^3$, or a particular spline basis, a GAM uses a flexible basis and estimates how much flexibility is justified by the data.
+
+In \texttt{mgcv::gam()}, a smooth term such as \texttt{s(x)} is represented by basis functions, and the amount of smoothing is estimated with a penalty. The \textbf{effective degrees of freedom} (edf) summarize the complexity of the fitted smooth:
+\begin{itemize}
+    \item[-] EDF close to $1$: the smooth is close to a straight line;
+    \item[-] Larger EDF: more curvature;
+    \item[-] Very large EDF without predictive improvement: likely overfitting.
+\end{itemize}
+
+\subsection{Example: NFL Draft Expected Value Curve}
+
+The NFL draft is a better first GAM example here, because the response is continuous and the curve is visibly nonlinear. Let
+\begin{itemize}
+    \item[-] $Y_i$ be player $i$'s second-contract annual value as a percentage of the salary cap;
+    \item[-] $x_i$ be the player's draft position.
+\end{itemize}
+
+A straight-line model is
+\[
+    \E[Y_i \mid x_i] = \beta_0 + \beta_1x_i.
+\]
+A Gaussian-identity GAM replaces the single slope with a smooth:
+\[
+    \E[Y_i \mid x_i] = \beta_0 + f(x_i).
+\]
+
+In \texttt{R}, we can fit this with \texttt{mgcv}:
+\begin{lstlisting}[language=R]
+library(mgcv)
+
+draft_gam = gam(
+    performance_value ~ s(draft_pos, k = 12),
+    data = draft_data,
+    family = gaussian(),
+    method = "REML"
+)
+
+summary(draft_gam)$s.table
+\end{lstlisting}
+
+Here \texttt{s(draft\_pos, k = 12)} creates a smooth draft-position effect. The value \texttt{k = 12} sets an upper limit on the basis dimension; the smoothing penalty decides how much of that flexibility to actually use.
+
+The command \texttt{summary(draft\_gam)\$s.table} reports the smooth-term summary, including the effective degrees of freedom. In this output, the \texttt{edf} column tells us how nonlinear the fitted curve actually is after penalization.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.78\textwidth]{figures/04_draft-gam.png}
+    \caption{Draft position against second-contract value, together with a straight-line fit and a Gaussian GAM. The GAM captures the steep early drop and flatter late-round tail without forcing a particular polynomial shape.}
+    \label{fig:draft-gam}
+\end{figure}
+
+Figure \ref{fig:draft-gam} is the right kind of GAM picture. Expected value falls sharply at the top of the draft, then the dropoff softens later on. A straight line misses that changing slope, while a GAM lets the data estimate the curve directly instead of forcing us to choose one polynomial form by hand.
+
+\subsection{Interpreting a GAM}
+
+A GAM coefficient table is usually not the main object of interpretation. The smooth term is the object of interest. We typically examine:
+\begin{itemize}
+    \item[-] The fitted response curve on the original outcome scale;
+    \item[-] The smooth contribution on the link scale;
+    \item[-] The effective degrees of freedom;
+    \item[-] Uncertainty bands;
+    \item[-] Out-of-sample predictive performance.
+\end{itemize}
+
+There is usually no single slope to report. Instead, we ask:
+\begin{itemize}
+    \item[-] Where is the relationship steepest?
+    \item[-] Where does it flatten out?
+    \item[-] Is the fitted curvature stable, or is it chasing noise?
+    \item[-] Does the smoother model improve calibration or prediction on held-out data?
+\end{itemize}
+
+\section{Choosing Between GLMs and GAMs}
+
+The modeling decision has two layers.
+
+First choose the response model:
+\begin{itemize}
+    \item[-] Use a Gaussian model for real-valued outcomes such as score differential
+    \item[-] Use a Bernoulli/binomial model for binary outcomes such as made/missed shots
+    \item[-] Use a Poisson-type model for count outcomes such as goals, points, or events
+\end{itemize}
+
+Then choose the mean structure:
+\begin{itemize}
+    \item[-] Use a GLM with linear terms when the relationship is simple, interpretable, and adequate
+    \item[-] Use transformed terms when theory or plots suggest a specific shape
+    \item[-] Use a GAM when the relationship is plausibly smooth but difficult to specify by hand
+\end{itemize}
+
+For both GLMs and GAMs, in-sample fit is not enough. For binary outcomes, compare models with held-out log loss, deviance, Brier score, and calibration plots. For count outcomes, compare held-out log likelihood, deviance, and prediction error on the count scale. For smooths, be especially cautious about extrapolation: a GAM is most trustworthy where there is enough data to support the fitted shape.
+
+\section*{Takeaways}
+
+\begin{itemize}
+    \item A GLM combines a response distribution, a link function, and a linear predictor.
+    \item Ordinary linear regression is a Gaussian GLM with identity link. Logistic regression is a Bernoulli/binomial GLM with logit link. Poisson regression is a count GLM with log link.
+    \item Coefficients are interpreted on the link scale: means for identity links, log odds for logit links, and log means for log links.
+    \item A GAM keeps the GLM response model and link function but replaces selected linear terms with smooth functions.
+    \item GAMs are useful when the relationship is plausibly smooth but not well specified by a simple hand-chosen transformation.
+    \item The practical workflow is: choose the response model, choose the mean structure, plot the fitted relationship, check calibration, and compare out-of-sample performance.
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,228 @@
+% Page setup
+\documentclass[twoside]{article}
+\setlength{\oddsidemargin}{0 in}
+\setlength{\evensidemargin}{0 in}
+\setlength{\topmargin}{-0.6 in}
+\setlength{\textwidth}{6.5 in}
+\setlength{\textheight}{8.5 in}
+\setlength{\headsep}{0.75 in}
+\setlength{\parindent}{0 in}
+\setlength{\parskip}{0.1 in}
+
+% Essential packages
+\usepackage{amsmath,amsfonts,amsthm,graphicx,bm,bbm}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{footmisc}
+\usepackage{color}
+\renewcommand{\thefootnote}{\alph{footnote}}
+
+% Counter setup for lab numbering
+\newcounter{lecnum}
+\renewcommand{\thepage}{\thelecnum-\arabic{page}}
+\renewcommand{\thesection}{\thelecnum.\arabic{section}}
+\renewcommand{\theequation}{\thelecnum.\arabic{equation}}
+\renewcommand{\thefigure}{\thelecnum.\arabic{figure}}
+\renewcommand{\thetable}{\thelecnum.\arabic{table}}
+
+% Lab header command
+\newcommand{\lab}[6]{
+   \pagestyle{myheadings}
+   \thispagestyle{plain}
+   \newpage
+   \setcounter{lecnum}{#1}
+   \setcounter{page}{1}
+   \noindent
+   \begin{center}
+   \framebox{
+      \vbox{\vspace{2mm}
+    \hbox to 6.28in { {\bf #3 \hfill #4} }
+       \vspace{4mm}
+       \hbox to 6.28in { {\Large \hfill Lab #1: #2  \hfill} }
+       \vspace{2mm}
+       \hbox to 6.28in { {\it Instructor: #5 \hfill Authors: #6} }
+      \vspace{2mm}}
+   }
+   \end{center}
+   \markboth{Lab #1: #2}{Lab #1: #2}
+}
+
+% Citation and reference commands
+\renewcommand{\cite}[1]{[#1]}
+\def\beginrefs{\begin{list}%
+        {[\arabic{equation}]}{\usecounter{equation}
+         \setlength{\leftmargin}{2.0truecm}\setlength{\labelsep}{0.4truecm}%
+         \setlength{\labelwidth}{1.6truecm}}}
+\def\endrefs{\end{list}}
+\def\bibentry#1{\item[\hbox{[#1]}]}
+
+% Figure command
+\newcommand{\fig}[3]{
+\vspace{#2}
+\begin{center}
+Figure \thelecnum.#1:~#3
+\end{center}
+}
+
+% Theorem environments
+\newtheorem{theorem}{Theorem}[lecnum]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{claim}[theorem]{Claim}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{definition}
+\newtheorem{example}[theorem]{Example}{\normalfont}
+
+% Common math symbols
+\renewcommand{\P}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\logit}{\operatorname{logit}}
+
+\begin{document}
+
+\lab{4}{GLMs and GAMs}{WSABI Summer Research Lab}{Summer 2026}{Jonathan Pipping-Gam\'{o}n}{JP, RB}
+
+\section{Batting Averages as a Binomial GLM}
+
+\subsection{Data}
+
+We are given player-level batting data from 2020 and 2021. Each row represents one MLB player who had at least 50 at-bats in both seasons. The columns are:
+\begin{itemize}
+    \item[-] \texttt{playerID}: player identifier;
+    \item[-] \texttt{H\_2021}: hits in 2021;
+    \item[-] \texttt{AB\_2021}: at-bats in 2021;
+    \item[-] \texttt{BA\_2021}: observed batting average in 2021;
+    \item[-] \texttt{BA\_2020}: observed batting average in 2020.
+\end{itemize}
+
+In Lecture 1, we modeled \texttt{BA\_2021} directly as a real-valued response. In this lab, you will revisit the same prediction problem using a \textbf{binomial GLM} that models hits out of at-bats.
+
+\color{blue}
+\subsection{Your Assignment}
+
+\textbf{Task 1: Fit two competing models.}
+\begin{enumerate}
+    \item[-] Fit the day-1 linear regression model
+    \[
+        \E[BA^{(2021)} \mid BA^{(2020)}]
+        =
+        \beta_0 + \beta_1 BA^{(2020)}.
+    \]
+    \item[-] Fit the binomial GLM
+    \[
+        H_i^{(2021)} \mid BA_i^{(2020)}
+        \sim
+        \text{Binomial}(AB_i^{(2021)}, p_i),
+        \qquad
+        \logit(p_i) = \alpha_0 + \alpha_1 BA_i^{(2020)}.
+    \]
+    \item[-] Write down both fitted models.
+\end{enumerate}
+
+\textbf{Task 2: Compare the fitted mean curves.}
+\begin{enumerate}
+    \item[-] Plot \texttt{BA\_2021} against \texttt{BA\_2020}.
+    \item[-] Overlay the fitted mean from the linear regression model.
+    \item[-] Overlay the fitted mean from the binomial GLM.
+    \item[-] Make the plot reflect how many at-bats each player had in 2021.
+    \item[-] Briefly explain how the two fits differ and why the binomial GLM is a more natural model for hits and outs.
+\end{enumerate}
+
+\textbf{Task 3: Interpret the binomial GLM.}
+\begin{enumerate}
+    \item[-] Report the coefficient estimates, standard errors, and a 95\% confidence interval for the GLM coefficients.
+    \item[-] Interpret the slope on the \textbf{log-odds} scale.
+    \item[-] Translate the slope into the effect of a 0.010 increase in 2020 batting average.
+\end{enumerate}
+
+\textbf{Task 4: Show why the denominator matters.}
+\begin{enumerate}
+    \item[-] Pick a hypothetical player with \texttt{BA\_2020 = 0.260}.
+    \item[-] Use your fitted GLM to estimate that player's 2021 hit probability \(p\).
+    \item[-] Compare two workloads:
+    \begin{enumerate}
+        \item 60 at-bats;
+        \item 600 at-bats.
+    \end{enumerate}
+    \item[-] For each workload, report the expected number of hits.
+    \item[-] For each workload, compute an approximate 95\% interval for the \textbf{observed batting average} using
+    \[
+        p \pm 1.96\sqrt{\frac{p(1-p)}{AB}}.
+    \]
+    \item[-] Explain why the low-at-bat player has a much wider interval even though the underlying hit probability is the same.
+\end{enumerate}
+
+\color{black}
+
+\section{Field-Goal Success with a Logistic GAM}
+
+\subsection{Data}
+
+We are given field-goal attempts from NFL play-by-play data. Each row represents one kick, and the columns are:
+\begin{itemize}
+    \item[-] \texttt{fg\_made}: 1 if the kick was made and 0 otherwise;
+    \item[-] \texttt{ydl}: yard line, measured from the opponent's end zone;
+    \item[-] \texttt{kq}: kicker quality;
+    \item[-] \texttt{kicker}: kicker name.
+\end{itemize}
+
+This is a probability problem, so all models in this section should be \textbf{binomial} models.
+
+\color{blue}
+\subsection{Your Assignment}
+
+\textbf{Task 1: Fit competing probability models.}
+\begin{enumerate}
+    \item[-] Fit at least one simple logistic GLM in \texttt{ydl}.
+    \item[-] Fit at least one richer logistic GLM, such as a quadratic model and/or a model including \texttt{kq}. Write down the exact model form you used.
+    \item[-] Fit a logistic GAM of the form
+    \[
+        \logit(p_i) = \beta_0 + f(ydl_i) + \gamma kq_i.
+    \]
+\end{enumerate}
+
+\textbf{Task 2: Compare the models out of sample.}
+\begin{enumerate}
+    \item[-] Use a train/test split or cross-validation.
+    \item[-] Compare the models using \textbf{log loss} as your main metric.
+    \item[-] State which model you prefer and why.
+\end{enumerate}
+
+\textbf{Task 3: Interpret the GAM fit.}
+\begin{enumerate}
+    \item[-] Report the estimated coefficient for \texttt{kq}, together with its standard error and a 95\% confidence interval.
+    \item[-] Report the effective degrees of freedom (edf) of the smooth term.
+    \item[-] Explain what it means if the edf is noticeably larger than 1.
+\end{enumerate}
+
+\textbf{Task 4: Visualize the fitted curves.}
+\begin{enumerate}
+    \item[-] Plot predicted make probability against \texttt{ydl} for your preferred GLM and your preferred GAM.
+    \item[-] Also compute binned observed make rates and add them to the plot.
+    \item[-] Comment on where the GAM improves on the simpler GLM and where the two fits are similar.
+\end{enumerate}
+
+\textbf{Task 5: Make concrete predictions.}
+\begin{enumerate}
+    \item[-] For a kicker with league-median \texttt{kq}, estimate make probability at
+    \begin{enumerate}
+        \item 20 yards from the opponent's end zone;
+        \item 35 yards from the opponent's end zone;
+        \item 50 yards from the opponent's end zone.
+    \end{enumerate}
+    \item[-] For at least one of these yard lines, compute an approximate 95\% confidence interval for the fitted probability by first building the interval on the logit scale and then transforming back with \texttt{plogis()}.
+\end{enumerate}
+
+\textbf{Task 6: Reflect.}
+\begin{enumerate}
+    \item[-] Explain the difference between choosing polynomial terms by hand in a GLM and letting a GAM learn a smooth curve.
+    \item[-] Give one reason a GAM can help.
+    \item[-] Give one reason a GAM can hurt.
+\end{enumerate}
+
+\color{black}
+
+\end{document}
