@@ -1,0 +1,723 @@
+---
+title: "03_Mackenzie"
+output: html_document
+date: "2026-06-03"
+---
+
+```{r}
+
+#############
+### SETUP ###
+#############
+
+# install.packages(c("ggplot2", "tidyverse"))
+library(ggplot2)
+library(tidyverse)
+
+# set seed
+set.seed(4)
+
+##################
+### Task 3.1.2 ###
+##################
+# load data
+field_goals = read_csv("/Users/mackenziebuckner/Desktop/lab-materials/2026/labs/data/03_field-goals.csv")
+
+# 1 - Model field goal success probability using at least 3 different models, with at least one being a linear regression and one being a logistic regression
+
+#linear regression
+linear_model = lm(fg_made ~ ydl + kq, data = field_goals)
+summary(linear_model)
+
+#linear regression with log distance
+log_linear_model = lm(fg_made ~ log(ydl) + kq, data = field_goals)
+summary(log_linear_model)
+
+#logistic regression
+logistic_model = glm(fg_made ~ ydl + kq, data = field_goals, family = binomial)
+summary(logistic_model)
+
+# 2 - For each logistic regression model you fit, report coefficient estimates, standard errors, and 95% confidence intervals. Interpret coefficients on the log-odds scale, and when useful exponentiate them to interpret odds ratios.
+
+# Get coefficient estimates and standard errors
+logistic_results = summary(logistic_model)$coefficients
+
+# Create coefficient table
+logistic_table = data.frame(
+  term = rownames(logistic_results),
+  estimate = logistic_results[, "Estimate"],
+  standard_error = logistic_results[, "Std. Error"]
+)
+
+# Add 95% confidence intervals and odds ratios
+logistic_table = logistic_table %>%
+  mutate(
+    ci_lower = estimate - 1.96 * standard_error,
+    ci_upper = estimate + 1.96 * standard_error,
+    odds_ratio = exp(estimate),
+    odds_ratio_ci_lower = exp(ci_lower),
+    odds_ratio_ci_upper = exp(ci_upper)
+  )
+
+print(logistic_table)
+
+
+# 3 - Use out-of-sample predictive performance to select the best model of the 3. Report the average test log loss for each model, and if you use cross-validation also report the standard error of the test log loss across folds.
+
+set.seed(4)
+
+# Randomly select 70% of rows for training
+train_rows = sample(1:nrow(field_goals), size = 0.7 * nrow(field_goals))
+
+train_data = field_goals[train_rows, ]
+test_data = field_goals[-train_rows, ]
+
+# Fit each model on the training data
+
+linear_model_train = lm(fg_made ~ ydl + kq, data = train_data)
+
+log_linear_model_train = lm(fg_made ~ log(ydl) + kq,data = train_data)
+
+logistic_model_train = glm(fg_made ~ ydl + kq, data = train_data, family = binomial)
+
+# Predict on the test data
+
+pred_linear = predict(linear_model_train, newdata = test_data)
+
+pred_log_linear = predict(log_linear_model_train, newdata = test_data)
+
+pred_logistic = predict(logistic_model_train, newdata = test_data, type = "response")
+
+# Linear models can predict probabilities below 0 or above 1.
+# Since log loss requires valid probabilities, we force predictions
+# to stay between 0 and 1.
+
+pred_linear = pmin(pmax(pred_linear, 0.000001), 0.999999)
+pred_log_linear = pmin(pmax(pred_log_linear, 0.000001), 0.999999)
+pred_logistic = pmin(pmax(pred_logistic, 0.000001), 0.999999)
+
+# Function for average test log loss
+# Lower log loss means better predictive performance.
+
+log_loss = function(actual, predicted) {
+  -mean(actual * log(predicted) + (1 - actual) * log(1 - predicted))
+}
+
+# Calculate average test log loss for each model
+
+log_loss_linear = log_loss(test_data$fg_made, pred_linear)
+log_loss_log_linear = log_loss(test_data$fg_made, pred_log_linear)
+log_loss_logistic = log_loss(test_data$fg_made, pred_logistic)
+
+# Put model comparison into a table
+
+model_comparison = data.frame(
+  model = c( "Linear Probability Model", "Log-Linear Model", "Logistic Regression"),
+  average_test_log_loss = c(log_loss_linear, log_loss_log_linear,log_loss_logistic)
+)
+
+# Sort from best to worst
+model_comparison = model_comparison %>%
+  arrange(average_test_log_loss)
+
+print(model_comparison)
+
+# Select the best model
+best_model_name = model_comparison$model[1]
+
+best_model_name
+
+# 4 - Write an interpretation of the coefficients of the selected model, making clear both the point estimate and the uncertainty in that estimate.
+
+# I used a 70/30 train-test split to compare the three models out of sample. Each model was trained on 70% of the data and tested on the remaining 30%. I used average test log loss to compare the models. Lower average test log loss means the model's predicted probabilities were closer to the actual made/missed outcomes. Since I did not use cross-validation, I do not report the standard error across folds.
+
+# 5 - Plot the selected model’s predicted make probability against yardline, including a 95% confidence band for the fitted probability. Also compare these fitted probabilities to binned observed make rates
+
+################
+# Task 3.1.2.5 #
+################
+# Plot predicted make probability against yardline for each of the 3 models.
+# Each plot includes a 95% confidence band and binned observed make rates.
+
+# Create prediction data across yardline values
+# We hold kicker quality constant at its average value.
+prediction_data = data.frame(
+  ydl = seq(
+    from = min(field_goals$ydl),
+    to = max(field_goals$ydl),
+    length.out = 200
+  ),
+  kq = mean(field_goals$kq)
+)
+
+# Create binned observed make rates
+binned_make_rates = field_goals %>%
+  mutate(
+    ydl_bin = cut(
+      ydl,
+      breaks = seq(
+        from = floor(min(ydl) / 5) * 5,
+        to = ceiling(max(ydl) / 5) * 5,
+        by = 5
+      ),
+      include.lowest = TRUE
+    )
+  ) %>%
+  group_by(ydl_bin) %>%
+  summarize(
+    mean_ydl = mean(ydl),
+    observed_make_rate = mean(fg_made),
+    number_of_kicks = n(),
+    .groups = "drop"
+  )
+
+print(binned_make_rates)
+
+# Predictions for linear probability model
+linear_pred = predict(
+  linear_model,
+  newdata = prediction_data,
+  se.fit = TRUE
+)
+
+linear_plot_data = prediction_data %>%
+  mutate(
+    fitted_probability = linear_pred$fit,
+    ci_lower = linear_pred$fit - 1.96 * linear_pred$se.fit,
+    ci_upper = linear_pred$fit + 1.96 * linear_pred$se.fit,
+    
+    # Keep predictions between 0 and 1 because they are probabilities
+    fitted_probability = pmin(pmax(fitted_probability, 0), 1),
+    ci_lower = pmin(pmax(ci_lower, 0), 1),
+    ci_upper = pmin(pmax(ci_upper, 0), 1)
+  )
+
+linear_plot = ggplot() +
+  geom_ribbon(
+    data = linear_plot_data,
+    aes(x = ydl, ymin = ci_lower, ymax = ci_upper),
+    alpha = 0.25
+  ) +
+  geom_line(
+    data = linear_plot_data,
+    aes(x = ydl, y = fitted_probability),
+    linewidth = 1.2
+  ) +
+  geom_point(
+    data = binned_make_rates,
+    aes(x = mean_ydl, y = observed_make_rate, size = number_of_kicks),
+    alpha = 0.85
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  labs(
+    title = "Linear Probability Model",
+    subtitle = "Predicted field goal make probability by yardline",
+    x = "Yardline",
+    y = "Make Probability",
+    size = "Number of Kicks"
+  ) +
+  theme_minimal(base_size = 13)
+
+linear_plot
+
+# Predictions for log-linear model
+log_linear_pred = predict(
+  log_linear_model,
+  newdata = prediction_data,
+  se.fit = TRUE
+)
+
+log_linear_plot_data = prediction_data %>%
+  mutate(
+    fitted_probability = log_linear_pred$fit,
+    ci_lower = log_linear_pred$fit - 1.96 * log_linear_pred$se.fit,
+    ci_upper = log_linear_pred$fit + 1.96 * log_linear_pred$se.fit,
+    
+    # Keep predictions between 0 and 1 because they are probabilities
+    fitted_probability = pmin(pmax(fitted_probability, 0), 1),
+    ci_lower = pmin(pmax(ci_lower, 0), 1),
+    ci_upper = pmin(pmax(ci_upper, 0), 1)
+  )
+
+log_linear_plot = ggplot() +
+  geom_ribbon(
+    data = log_linear_plot_data,
+    aes(x = ydl, ymin = ci_lower, ymax = ci_upper),
+    alpha = 0.25
+  ) +
+  geom_line(
+    data = log_linear_plot_data,
+    aes(x = ydl, y = fitted_probability),
+    linewidth = 1.2
+  ) +
+  geom_point(
+    data = binned_make_rates,
+    aes(x = mean_ydl, y = observed_make_rate, size = number_of_kicks),
+    alpha = 0.85
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  labs(
+    title = "Log-Linear Model",
+    subtitle = "Predicted field goal make probability by yardline",
+    x = "Yardline",
+    y = "Make Probability",
+    size = "Number of Kicks"
+  ) +
+  theme_minimal(base_size = 13)
+
+log_linear_plot
+
+# Predictions for logistic regression model
+# For logistic regression, predict on the log-odds scale first.
+logistic_pred = predict(
+  logistic_model,
+  newdata = prediction_data,
+  type = "link",
+  se.fit = TRUE
+)
+
+logistic_plot_data = prediction_data %>%
+  mutate(
+    fitted_probability = plogis(logistic_pred$fit),
+    ci_lower = plogis(logistic_pred$fit - 1.96 * logistic_pred$se.fit),
+    ci_upper = plogis(logistic_pred$fit + 1.96 * logistic_pred$se.fit)
+  )
+
+logistic_plot = ggplot() +
+  geom_ribbon(
+    data = logistic_plot_data,
+    aes(x = ydl, ymin = ci_lower, ymax = ci_upper),
+    alpha = 0.25
+  ) +
+  geom_line(
+    data = logistic_plot_data,
+    aes(x = ydl, y = fitted_probability),
+    linewidth = 1.2
+  ) +
+  geom_point(
+    data = binned_make_rates,
+    aes(x = mean_ydl, y = observed_make_rate, size = number_of_kicks),
+    alpha = 0.85
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  labs(
+    title = "Logistic Regression Model",
+    subtitle = "Predicted field goal make probability by yardline",
+    x = "Yardline",
+    y = "Make Probability",
+    size = "Number of Kicks"
+  ) +
+  theme_minimal(base_size = 13)
+
+logistic_plot
+
+# 6 - Briefly explain the difference between uncertainty in the fitted make probability and uncertainty in the outcome of one kick. The fitted probability can have a confidence interval, but the actual kick is still Bernoulli: it is either 0 or 1
+
+# Each plot shows the model's fitted make probability as yardline changes, holding kicker quality fixed at its average value. The shaded band is the 95% confidence interval for the fitted probability. The dots show the actual observed make rates within yardline bins. A better model should have a fitted probability curve that closely follows the binned observed make rates. The logistic regression model is especially useful because its predicted probabilities naturally stay between 0 and 1. The linear and log-linear models can sometimes predict probabilities below 0 or above 1, so those predictions were clipped to stay within the probability range.
+
+```
+```{r}
+##################
+### Task 3.2.3 ###
+##################
+
+# load data
+ncaab_results = read_csv("/Users/mackenziebuckner/Desktop/lab-materials/2026/labs/data/03_ncaab-results.csv")
+ncaab_team_info = read_csv("/Users/mackenziebuckner/Desktop/lab-materials/2026/labs/data/03_ncaab-teams.csv")
+
+# 1 - Filter the data to include games from the 2023-2024 season (i.e. s = 2023)
+ncaab_2023 = ncaab_results %>%
+  filter(Season == 2024)
+
+
+# 2 - Recode your dataset to create a model dataset like the one in Lecture 3.
+
+bt_data = ncaab_2023 %>%
+  mutate(
+    team1 = case_when(
+      WLoc == "H" ~ WTeamID,
+      WLoc == "A" ~ LTeamID,
+      WLoc == "N" ~ WTeamID
+    ),
+    
+    team2 = case_when(
+      WLoc == "H" ~ LTeamID,
+      WLoc == "A" ~ WTeamID,
+      WLoc == "N" ~ LTeamID
+    ),
+    
+    team1_win = case_when(
+      WLoc == "H" ~ 1,
+      WLoc == "A" ~ 0,
+      WLoc == "N" ~ 1
+    ),
+    
+    home_adv = ifelse(WLoc == "N", 0, 1)
+  ) %>%
+  select(
+    Season,
+    DayNum,
+    team1,
+    team2,
+    team1_win,
+    home_adv,
+    WTeamID,
+    LTeamID,
+    WScore,
+    LScore,
+    WLoc
+  )
+
+# Add team names
+bt_data = bt_data %>%
+  left_join(
+    ncaab_team_info %>%
+      select(TeamID, team1_name = TeamName),
+    by = c("team1" = "TeamID")
+  ) %>%
+  left_join(
+    ncaab_teams %>%
+      select(TeamID, team2_name = TeamName),
+    by = c("team2" = "TeamID")
+  )
+
+# Check recorded data
+bt_data %>%
+  select(DayNum, team1_name, team2_name, team1_win, home_adv, WLoc) %>%
+  head(10)
+
+table(bt_data$team1_win)
+table(bt_data$home_adv)
+
+
+# 3 -  Fit a Bradley-Terry model to the data, and state what identifiability convention you used for the team ratings, such as centering the ratings to have mean zero or dropping one reference team
+
+# Get all teams in the 2023 season data
+all_team_ids = sort(unique(c(bt_data$team1, bt_data$team2)))
+
+# Drop one reference team
+ref_team = all_team_ids[1]
+nonref_team_ids = all_team_ids[all_team_ids != ref_team]
+
+# Print the reference team
+ref_team_name = ncaab_teams %>%
+  filter(TeamID == ref_team) %>%
+  pull(TeamName)
+
+cat("Reference team dropped during model fitting:", ref_team, ref_team_name, "\n")
+
+# Create indicator matrix for team1
+team1_matrix = model.matrix(
+  ~ factor(team1, levels = all_team_ids) - 1,
+  data = bt_data
+)
+
+# Create indicator matrix for team2
+team2_matrix = model.matrix(
+  ~ factor(team2, levels = all_team_ids) - 1,
+  data = bt_data
+)
+
+# Bradley-Terry uses rating_team1 - rating_team2
+rating_diff_matrix = team1_matrix - team2_matrix
+
+# Rename columns
+colnames(rating_diff_matrix) = paste0("team_", all_team_ids)
+
+# Drop reference team column
+rating_diff_matrix = rating_diff_matrix[
+  ,
+  paste0("team_", nonref_team_ids),
+  drop = FALSE
+]
+
+# Create model dataset
+bt_model_data = as.data.frame(rating_diff_matrix) %>%
+  mutate(
+    team1_win = bt_data$team1_win,
+    home_adv = bt_data$home_adv
+  ) %>%
+  select(team1_win, home_adv, everything())
+
+# Fit Bradley-Terry logistic regression model
+bt_model = glm(
+  team1_win ~ 0 + .,
+  data = bt_model_data,
+  family = binomial
+)
+
+#summary(bt_model)
+
+
+# 4 - Report the estimated coefficients with uncertainty summaries. In particular, visualize team ratings with uncertainty intervals, and for comparisons between two teams focus on uncertainty in the rating difference.
+bt_coef_results = summary(bt_model)$coefficients
+
+bt_coef_table = data.frame(
+  term = rownames(bt_coef_results),
+  estimate = bt_coef_results[, "Estimate"],
+  standard_error = bt_coef_results[, "Std. Error"]
+) %>%
+  mutate(
+    ci_lower = estimate - 1.96 * standard_error,
+    ci_upper = estimate + 1.96 * standard_error,
+    odds_ratio = exp(estimate),
+    odds_ratio_ci_lower = exp(ci_lower),
+    odds_ratio_ci_upper = exp(ci_upper)
+  )
+
+# Print full coefficient table
+print(bt_coef_table)
+
+# Print home-court advantage coefficient separately
+home_adv_table = bt_coef_table %>%
+  filter(term == "home_adv")
+
+print(home_adv_table)
+
+# The home_adv coefficient is the estimated increase in log-odds from being the home team instead of playing at a neutral site, holding team ratings fixed. exp(home_adv coefficient) is the home-court odds ratio. If the odds ratio is greater than 1, playing at home increases the odds of winning.
+
+# Create centered team ratings with uncertainty intervals
+
+coef_vec = coef(bt_model)
+vc = vcov(bt_model)
+
+# Raw ratings
+# The reference team has rating 0 because it was dropped from the model.
+raw_ratings = rep(0, length(all_team_ids))
+names(raw_ratings) = as.character(all_team_ids)
+
+raw_ratings[as.character(nonref_team_ids)] =
+  coef_vec[paste0("team_", nonref_team_ids)]
+
+# Center ratings to have mean zero
+centered_ratings = raw_ratings - mean(raw_ratings)
+
+# Create covariance matrix for raw ratings, including the dropped reference team
+n_teams = length(all_team_ids)
+
+rating_cov_raw = matrix(
+  0,
+  nrow = n_teams,
+  ncol = n_teams,
+  dimnames = list(as.character(all_team_ids), as.character(all_team_ids))
+)
+
+team_coef_names = paste0("team_", nonref_team_ids)
+
+rating_cov_raw[
+  as.character(nonref_team_ids),
+  as.character(nonref_team_ids)
+] = vc[team_coef_names, team_coef_names]
+
+# Center the covariance matrix
+centering_matrix = diag(n_teams) - matrix(1 / n_teams, nrow = n_teams, ncol = n_teams)
+
+rating_cov_centered = centering_matrix %*% rating_cov_raw %*% t(centering_matrix)
+
+rating_se = sqrt(diag(rating_cov_centered))
+
+# Ratings table
+ratings_table = data.frame(
+  TeamID = as.integer(names(centered_ratings)),
+  rating = as.numeric(centered_ratings),
+  standard_error = as.numeric(rating_se)
+) %>%
+  mutate(
+    ci_lower = rating - 1.96 * standard_error,
+    ci_upper = rating + 1.96 * standard_error
+  ) %>%
+  left_join(ncaab_teams, by = "TeamID") %>%
+  arrange(desc(rating))
+
+print(ratings_table)
+
+# Print top 25 teams
+top_25_ratings = ratings_table %>%
+  select(TeamName, rating, standard_error, ci_lower, ci_upper) %>%
+  slice_head(n = 25)
+
+print(top_25_ratings)
+
+
+# Visualize team ratings with uncertainty intervals.
+# Plot top 20 and bottom 20 teams so the graph is readable.
+
+ratings_to_plot = bind_rows(
+  ratings_table %>% slice_max(rating, n = 20),
+  ratings_table %>% slice_min(rating, n = 20)
+) %>%
+  distinct()
+
+ggplot(
+  ratings_to_plot,
+  aes(y = reorder(TeamName, rating), x = rating)
+) +
+  geom_segment(
+    aes(x = ci_lower, xend = ci_upper, yend = reorder(TeamName, rating)),
+    linewidth = 0.8,
+    alpha = 0.6
+  ) +
+  geom_point(size = 2.5) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Bradley-Terry Team Ratings",
+    subtitle = "Ratings are centered to have mean zero with approximate 95% confidence intervals",
+    x = "Centered Team Rating",
+    y = "Team"
+  ) +
+  theme_minimal(base_size = 12)
+
+# Interpretation:
+# Each team rating is on the log-odds scale. Higher ratings mean stronger teams according to the Bradley-Terry model. Since ratings are centered to have mean zero, positive ratings are above average and negative ratings are below average.
+#
+# For comparing two teams, the most important quantity is the rating difference: rating_team_A - rating_team_B. On a neutral court, this rating difference equals the log-odds that Team A beats Team B.
+
+# Set a Vegas moneyline price for the 2023-2024 NCAA Tournament final between the Purdue Boilermakers and the UConn Huskies (Note: the game is played at a neutral site, so β0 = 0). Report:
+# (a) the estimated neutral-site win probability for each team;
+# (b) an approximate 95% confidence interval for that probability;
+# (c) the corresponding moneyline price for the point estimate and for the endpoints of the interval.
+
+# Find Purdue and UConn team IDs
+purdue_id = ncaab_teams %>%
+  filter(TeamName == "Purdue") %>%
+  pull(TeamID)
+
+uconn_id = ncaab_teams %>%
+  filter(TeamName == "Connecticut") %>%
+  pull(TeamID)
+
+purdue_id
+uconn_id
+
+# Function to create a contrast vector for rating_team_a - rating_team_b
+make_rating_contrast = function(team_a_id, team_b_id) {
+  
+  contrast = rep(0, length(coef_vec))
+  names(contrast) = names(coef_vec)
+  
+  team_a_name = paste0("team_", team_a_id)
+  team_b_name = paste0("team_", team_b_id)
+  
+  # Add 1 for Team A, unless Team A is the dropped reference team
+  if (team_a_name %in% names(contrast)) {
+    contrast[team_a_name] = 1
+  }
+  
+  # Subtract 1 for Team B, unless Team B is the dropped reference team
+  if (team_b_name %in% names(contrast)) {
+    contrast[team_b_name] = contrast[team_b_name] - 1
+  }
+  
+  return(contrast)
+}
+
+# Purdue - UConn rating difference
+purdue_uconn_contrast = make_rating_contrast(purdue_id, uconn_id)
+
+delta_hat = sum(purdue_uconn_contrast * coef_vec)
+
+delta_se = sqrt(
+  as.numeric(t(purdue_uconn_contrast) %*% vc %*% purdue_uconn_contrast)
+)
+
+delta_ci = delta_hat + c(-1, 1) * 1.96 * delta_se
+
+# Convert rating difference interval to probability interval
+purdue_win_prob = 1 / (1 + exp(-delta_hat))
+
+purdue_win_prob_ci = c(
+  1 / (1 + exp(-delta_ci[1])),
+  1 / (1 + exp(-delta_ci[2]))
+)
+
+uconn_win_prob = 1 - purdue_win_prob
+
+uconn_win_prob_ci = c(
+  1 - purdue_win_prob_ci[2],
+  1 - purdue_win_prob_ci[1]
+)
+
+# Moneyline formula
+prob_to_moneyline = function(p) {
+  ifelse(
+    p >= 0.5,
+    -100 * p / (1 - p),
+    100 * (1 - p) / p
+  )
+}
+
+# Create final probability and moneyline table
+moneyline_table = data.frame(
+  team = c("Purdue", "UConn"),
+  estimated_win_probability = c(purdue_win_prob, uconn_win_prob),
+  ci_lower_probability = c(purdue_win_prob_ci[1], uconn_win_prob_ci[1]),
+  ci_upper_probability = c(purdue_win_prob_ci[2], uconn_win_prob_ci[2])
+) %>%
+  mutate(
+    moneyline_point_estimate = prob_to_moneyline(estimated_win_probability),
+    moneyline_at_ci_lower = prob_to_moneyline(ci_lower_probability),
+    moneyline_at_ci_upper = prob_to_moneyline(ci_upper_probability)
+  )
+
+print(moneyline_table)
+
+# Rounded table for reporting
+moneyline_table_rounded = moneyline_table %>%
+  mutate(
+    estimated_win_probability = round(estimated_win_probability, 3),
+    ci_lower_probability = round(ci_lower_probability, 3),
+    ci_upper_probability = round(ci_upper_probability, 3),
+    moneyline_point_estimate = round(moneyline_point_estimate, 0),
+    moneyline_at_ci_lower = round(moneyline_at_ci_lower, 0),
+    moneyline_at_ci_upper = round(moneyline_at_ci_upper, 0)
+  )
+
+print(moneyline_table_rounded)
+
+
+# Rating difference uncertainty table
+purdue_uconn_difference = data.frame(
+  comparison = "Purdue rating - UConn rating",
+  rating_difference = delta_hat,
+  standard_error = delta_se,
+  ci_lower = delta_ci[1],
+  ci_upper = delta_ci[2]
+)
+
+print(purdue_uconn_difference)
+
+# Plot uncertainty in the Purdue vs. UConn rating difference
+ggplot(
+  purdue_uconn_difference,
+  aes(y = comparison, x = rating_difference)
+) +
+  geom_segment(
+    aes(x = ci_lower, xend = ci_upper, yend = comparison),
+    linewidth = 1
+  ) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Purdue vs. UConn Rating Difference",
+    subtitle = "Neutral-site comparison, so home-court advantage is set to 0",
+    x = "Rating Difference on Log-Odds Scale",
+    y = ""
+  ) +
+  theme_minimal(base_size = 13)
+
+
+# Final written explanation:
+# The confidence interval for the estimated win probability describes uncertainty in the model's estimate of the true neutral-site win probability. This uncertainty comes from estimating Purdue's and UConn's team ratings from data.
+# This is different from uncertainty in the actual game outcome. The actual game is a Bernoulli outcome: either Purdue wins or UConn wins. A team does not win 65% of one game. Instead, the model's probability says that across many similar neutral-site games, that team would be expected to win about that percentage of the time. Therefore, the confidence interval measures uncertainty in the estimated probability, while the actual game outcome is still binary: win or loss.
+
+```
+
