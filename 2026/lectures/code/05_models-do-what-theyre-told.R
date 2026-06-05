@@ -210,17 +210,17 @@ adjusted_predictions = prediction_grid |>
         predicted_woba = predict(adjusted_tto_model, newdata = prediction_grid)
     )
 
-indicator_predictions = prediction_grid |>
-    mutate(
-        predicted_woba = predict(indicator_model, newdata = prediction_grid)
-    )
-
-indicator_tto_means = indicator_predictions |>
+adjusted_tto_means = adjusted_predictions |>
     group_by(TTO) |>
     summarise(mean_woba = mean(predicted_woba), .groups = "drop") |>
     mutate(
         start_x = c(1, 10, 19),
         end_x = c(9, 18, 27)
+    )
+
+indicator_predictions = prediction_grid |>
+    mutate(
+        predicted_woba = predict(indicator_model, newdata = prediction_grid)
     )
 
 linear_predictions = prediction_grid |>
@@ -255,6 +255,14 @@ common_theme = theme_minimal(base_size = 12) +
         plot.title = element_text(size = 16)
     )
 
+observed_plot = ggplot(raw_sequence_means, aes(x = batter_sequence_number, y = mean_woba)) +
+    geom_point(size = 2.7, color = "black") +
+    labs(
+        x = "batter sequence number",
+        y = "observed mean wOBA"
+    ) +
+    common_theme
+
 trajectory_plot = ggplot(raw_sequence_means, aes(x = batter_sequence_number, y = mean_woba)) +
     geom_point(size = 2.7, color = "black") +
     geom_segment(
@@ -266,27 +274,18 @@ trajectory_plot = ggplot(raw_sequence_means, aes(x = batter_sequence_number, y =
     ) +
     labs(
         x = "batter sequence number",
-        y = "mean wOBA"
-    ) +
-    common_theme
-
-adjusted_plot = ggplot(adjusted_predictions, aes(x = batter_sequence_number, y = predicted_woba)) +
-    geom_point(size = 2.1, color = "black") +
-    labs(
-        x = "batter sequence number",
-        y = "predicted wOBA",
-        title = "handedness match, batter at home,\naverage pitcher and batter"
+        y = "observed mean wOBA"
     ) +
     common_theme
 
 models_plot = ggplot(indicator_predictions, aes(x = batter_sequence_number, y = predicted_woba)) +
     geom_point(size = 2.4, color = "black") +
     geom_segment(
-        data = indicator_tto_means,
+        data = adjusted_tto_means,
         aes(x = start_x, xend = end_x, y = mean_woba, yend = mean_woba),
         inherit.aes = FALSE,
         linewidth = 0.7,
-        color = "black"
+        color = "grey40"
     ) +
     geom_line(
         data = linear_predictions,
@@ -308,14 +307,15 @@ models_plot = ggplot(indicator_predictions, aes(x = batter_sequence_number, y = 
     common_theme
 
 combined_plot = ggplot(combined_predictions, aes(x = batter_sequence_number, y = predicted_woba)) +
-    geom_point(size = 2.1, color = "black") +
     geom_segment(
-        data = indicator_tto_means,
+        data = adjusted_tto_means,
         aes(x = start_x, xend = end_x, y = mean_woba, yend = mean_woba),
         inherit.aes = FALSE,
         linewidth = 0.7,
         color = "grey40"
     ) +
+    geom_line(linewidth = 0.9, color = "black") +
+    geom_point(size = 1.8, color = "black") +
     labs(
         x = "batter sequence number",
         y = "predicted wOBA",
@@ -328,16 +328,16 @@ combined_plot = ggplot(combined_predictions, aes(x = batter_sequence_number, y =
 ########################
 
 ggsave(
-    file.path(figure_dir, "05_ttop-trajectory.png"),
-    trajectory_plot,
+    file.path(figure_dir, "05_ttop-observed.png"),
+    observed_plot,
     width = 7,
     height = 4.8,
     dpi = 300
 )
 
 ggsave(
-    file.path(figure_dir, "05_ttop-adjusted.png"),
-    adjusted_plot,
+    file.path(figure_dir, "05_ttop-trajectory.png"),
+    trajectory_plot,
     width = 7,
     height = 4.8,
     dpi = 300
