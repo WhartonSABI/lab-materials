@@ -16,6 +16,20 @@ set.seed(7)
 seasons <- 2022:2026
 swing_threshold <- 7
 horizon_seconds <- 180
+detected_cores <- parallel::detectCores()
+n_cores <- max(1, detected_cores - 4)
+redownload_pbp <- FALSE
+rebuild_analysis_data <- FALSE
+cache_dir <- "cache"
+dir.create(cache_dir, showWarnings = FALSE)
+
+cache_key <- paste0(
+  "seasons_", min(seasons), "_", max(seasons),
+  "_swing_", swing_threshold,
+  "_horizon_", horizon_seconds
+)
+pbp_cache_path <- file.path(cache_dir, paste0("nba_pbp_", min(seasons), "_", max(seasons), ".rds"))
+analysis_cache_path <- file.path(cache_dir, paste0("timeout_opportunities_", cache_key, ".rds"))
 
 ########################################
 ### HELPER FUNCTIONS FOR THE LAB DATA ###
@@ -85,21 +99,26 @@ timeout_in_window_lookup <- function(game_df, play_number, current_seconds_remai
   )
 }
 
-build_timeout_opportunities <- function(pbp,
-                                        swing_threshold = 7,
-                                        horizon_seconds = 180) {
-  pbp_clean <- pbp %>%
-    filter(season_type == 2) %>%
-    arrange(game_id, game_play_number) %>%
+parallel_lapply <- function(X, FUN, ..., n_cores = 1) {
+  if (.Platform$OS.type == "unix" && n_cores > 1) {
+    parallel::mclapply(X, FUN, ..., mc.cores = n_cores)
+  } else {
+    lapply(X, FUN, ...)
+  }
+}
+
+build_timeout_opportunities_one_game <- function(game_df,
+                                                 swing_threshold = 7,
+                                                 horizon_seconds = 180) {
+  game_df <- game_df %>%
+    arrange(game_play_number) %>%
     mutate(
       timeout_flag = str_detect(str_to_lower(coalesce(type_text, "")), "timeout") |
-        str_detect(str_to_lower(coalesce(text, "")), "timeout")
-    ) %>%
-    group_by(game_id) %>%
-    mutate(timeout_segment = cumsum(timeout_flag)) %>%
-    ungroup()
+        str_detect(str_to_lower(coalesce(text, "")), "timeout"),
+      timeout_segment = cumsum(timeout_flag)
+    )
 
-  scoring_events <- pbp_clean %>%
+  scoring_events <- game_df %>%
     filter(scoring_play, score_value > 0, !is.na(team_id)) %>%
     mutate(
       scoring_side = case_when(
@@ -122,15 +141,17 @@ build_timeout_opportunities <- function(pbp,
       target_end_game_seconds_remaining = pmax(0, end_game_seconds_remaining - horizon_seconds)
     )
 
-  game_lookup <- split(pbp_clean, pbp_clean$game_id)
+  if (nrow(scoring_events) == 0) {
+    return(tibble())
+  }
 
   scoring_events %>%
     mutate(
       prior_margin_180 = pmap_dbl(
-        list(game_id, game_play_number, start_window_seconds_remaining, focal_side),
-        function(game_id, play_number, start_window_seconds_remaining, focal_side) {
+        list(game_play_number, start_window_seconds_remaining, focal_side),
+        function(play_number, start_window_seconds_remaining, focal_side) {
           prior_margin_lookup(
-            game_df = game_lookup[[as.character(game_id)]],
+            game_df = game_df,
             play_number = play_number,
             target_seconds_remaining = start_window_seconds_remaining,
             focal_side = focal_side
@@ -139,10 +160,10 @@ build_timeout_opportunities <- function(pbp,
       ),
       swing_last_180 = current_margin - prior_margin_180,
       timeout_in_prior_180 = pmap_lgl(
-        list(game_id, game_play_number, end_game_seconds_remaining, start_window_seconds_remaining),
-        function(game_id, play_number, current_seconds_remaining, start_window_seconds_remaining) {
+        list(game_play_number, end_game_seconds_remaining, start_window_seconds_remaining),
+        function(play_number, current_seconds_remaining, start_window_seconds_remaining) {
           timeout_in_window_lookup(
-            game_df = game_lookup[[as.character(game_id)]],
+            game_df = game_df,
             play_number = play_number,
             current_seconds_remaining = current_seconds_remaining,
             target_seconds_remaining = start_window_seconds_remaining
@@ -150,10 +171,10 @@ build_timeout_opportunities <- function(pbp,
         }
       ),
       timeout_now = pmap_lgl(
-        list(game_id, game_play_number, end_game_seconds_remaining, focal_team_id),
-        function(game_id, play_number, seconds_remaining, focal_team_id) {
+        list(game_play_number, end_game_seconds_remaining, focal_team_id),
+        function(play_number, seconds_remaining, focal_team_id) {
           timeout_now_lookup(
-            game_df = game_lookup[[as.character(game_id)]],
+            game_df = game_df,
             play_number = play_number,
             seconds_remaining = seconds_remaining,
             focal_team_id = focal_team_id
@@ -161,10 +182,10 @@ build_timeout_opportunities <- function(pbp,
         }
       ),
       future_margin = pmap_dbl(
-        list(game_id, game_play_number, target_end_game_seconds_remaining, focal_side),
-        function(game_id, play_number, target_seconds_remaining, focal_side) {
+        list(game_play_number, target_end_game_seconds_remaining, focal_side),
+        function(play_number, target_seconds_remaining, focal_side) {
           future_margin_lookup(
-            game_df = game_lookup[[as.character(game_id)]],
+            game_df = game_df,
             play_number = play_number,
             target_seconds_remaining = target_seconds_remaining,
             focal_side = focal_side
@@ -180,7 +201,7 @@ build_timeout_opportunities <- function(pbp,
       swing_last_180 <= -swing_threshold,
       end_game_seconds_remaining >= horizon_seconds
     ) %>%
-    group_by(game_id, focal_side, timeout_segment) %>%
+    group_by(focal_side, timeout_segment) %>%
     arrange(game_play_number, .by_group = TRUE) %>%
     slice(1) %>%
     ungroup() %>%
@@ -203,6 +224,27 @@ build_timeout_opportunities <- function(pbp,
       timeout_now,
       margin_change_next_180
     )
+}
+
+build_timeout_opportunities <- function(pbp,
+                                        swing_threshold = 7,
+                                        horizon_seconds = 180,
+                                        n_cores = 1) {
+  pbp_clean <- pbp %>%
+    filter(season_type == 2) %>%
+    arrange(game_id, game_play_number)
+
+  game_lookup <- split(pbp_clean, pbp_clean$game_id)
+
+  game_results <- parallel_lapply(
+    game_lookup,
+    build_timeout_opportunities_one_game,
+    swing_threshold = swing_threshold,
+    horizon_seconds = horizon_seconds,
+    n_cores = n_cores
+  )
+
+  bind_rows(game_results)
 }
 
 smd_one <- function(x, z, w = NULL) {
@@ -269,15 +311,30 @@ nearest_ps_match <- function(data, treat = "timeout_now", score = "ps_hat") {
 ### DOWNLOAD / CONSTRUCT ###
 ############################
 
-# load regular-season play-by-play
-pbp <- hoopR::load_nba_pbp(seasons = seasons)
+# load regular-season play-by-play once, then reuse the cached file
+if (file.exists(pbp_cache_path) && !redownload_pbp) {
+  message("Loading cached play-by-play from ", pbp_cache_path)
+  pbp <- readRDS(pbp_cache_path)
+} else {
+  message("Downloading play-by-play for seasons ", min(seasons), ":", max(seasons))
+  pbp <- hoopR::load_nba_pbp(seasons = seasons)
+  saveRDS(pbp, pbp_cache_path)
+}
 
-# build one row per threshold-crossing timeout decision opportunity
-analysis_data <- build_timeout_opportunities(
-  pbp = pbp,
-  swing_threshold = swing_threshold,
-  horizon_seconds = horizon_seconds
-)
+# build one row per threshold-crossing timeout decision opportunity once, then cache it
+if (file.exists(analysis_cache_path) && !rebuild_analysis_data) {
+  message("Loading cached analysis dataset from ", analysis_cache_path)
+  analysis_data <- readRDS(analysis_cache_path)
+} else {
+  message("Constructing timeout opportunities with ", n_cores, " cores")
+  analysis_data <- build_timeout_opportunities(
+    pbp = pbp,
+    swing_threshold = swing_threshold,
+    horizon_seconds = horizon_seconds,
+    n_cores = n_cores
+  )
+  saveRDS(analysis_data, analysis_cache_path)
+}
 
 # inspect the analysis dataset
 glimpse(analysis_data)
