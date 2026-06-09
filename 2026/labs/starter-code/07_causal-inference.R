@@ -26,7 +26,8 @@ dir.create(cache_dir, showWarnings = FALSE)
 cache_key <- paste0(
   "seasons_", min(seasons), "_", max(seasons),
   "_swing_", swing_threshold,
-  "_horizon_", horizon_seconds
+  "_horizon_", horizon_seconds,
+  "_episode_cooldown"
 )
 pbp_cache_path <- file.path(cache_dir, paste0("nba_pbp_", min(seasons), "_", max(seasons), ".rds"))
 analysis_cache_path <- file.path(cache_dir, paste0("timeout_opportunities_", cache_key, ".rds"))
@@ -105,6 +106,34 @@ parallel_lapply <- function(X, FUN, ..., n_cores = 1) {
   } else {
     lapply(X, FUN, ...)
   }
+}
+
+select_episode_opportunities <- function(events, horizon_seconds = 180) {
+  events %>%
+    arrange(focal_side, game_play_number) %>%
+    split(.$focal_side) %>%
+    map_dfr(function(team_events) {
+      keep_rows <- integer()
+      next_allowed_seconds_remaining <- Inf
+      last_timeout_segment <- NA_integer_
+
+      for (i in seq_len(nrow(team_events))) {
+        current_segment <- team_events$timeout_segment[i]
+        current_seconds <- team_events$end_game_seconds_remaining[i]
+        same_timeout_segment <- !is.na(last_timeout_segment) &&
+          current_segment == last_timeout_segment
+        still_in_episode <- same_timeout_segment &&
+          current_seconds > next_allowed_seconds_remaining
+
+        if (!still_in_episode) {
+          keep_rows <- c(keep_rows, i)
+          next_allowed_seconds_remaining <- current_seconds - horizon_seconds
+          last_timeout_segment <- current_segment
+        }
+      }
+
+      team_events[keep_rows, , drop = FALSE]
+    })
 }
 
 build_timeout_opportunities_one_game <- function(game_df,
@@ -201,10 +230,7 @@ build_timeout_opportunities_one_game <- function(game_df,
       swing_last_180 <= -swing_threshold,
       end_game_seconds_remaining >= horizon_seconds
     ) %>%
-    group_by(focal_side, timeout_segment) %>%
-    arrange(game_play_number, .by_group = TRUE) %>%
-    slice(1) %>%
-    ungroup() %>%
+    select_episode_opportunities(horizon_seconds = horizon_seconds) %>%
     select(
       season,
       game_id,
