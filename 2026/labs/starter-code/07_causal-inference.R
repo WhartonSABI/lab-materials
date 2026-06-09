@@ -17,6 +17,9 @@ seasons <- 2022:2026
 swing_threshold <- 7
 horizon_seconds <- 180
 detected_cores <- parallel::detectCores()
+if (is.na(detected_cores)) {
+  detected_cores <- 1
+}
 n_cores <- max(1, detected_cores - 4)
 redownload_pbp <- FALSE
 rebuild_analysis_data <- FALSE
@@ -36,16 +39,26 @@ analysis_cache_path <- file.path(cache_dir, paste0("timeout_opportunities_", cac
 ### HELPER FUNCTIONS FOR THE LAB DATA ###
 ########################################
 
+is_timeout_event <- function(type_text, text) {
+  str_detect(str_to_lower(coalesce(type_text, "")), "timeout") |
+    str_detect(str_to_lower(coalesce(text, "")), "timeout")
+}
+
+margin_for_side <- function(home_score, away_score, focal_side) {
+  if_else(
+    focal_side == "home",
+    home_score - away_score,
+    away_score - home_score
+  )
+}
+
 timeout_now_lookup <- function(game_df, play_number, seconds_remaining, focal_team_id) {
   window <- game_df %>%
     filter(
       game_play_number > play_number,
       end_game_seconds_remaining == seconds_remaining
     ) %>%
-    mutate(
-      timeout_flag = str_detect(str_to_lower(coalesce(type_text, "")), "timeout") |
-        str_detect(str_to_lower(coalesce(text, "")), "timeout")
-    )
+    mutate(timeout_flag = is_timeout_event(type_text, text))
 
   any(window$timeout_flag & window$team_id == focal_team_id, na.rm = TRUE)
 }
@@ -101,39 +114,72 @@ timeout_in_window_lookup <- function(game_df, play_number, current_seconds_remai
 }
 
 parallel_lapply <- function(X, FUN, ..., n_cores = 1) {
-  if (.Platform$OS.type == "unix" && n_cores > 1) {
+  if (n_cores <= 1) {
+    return(lapply(X, FUN, ...))
+  }
+
+  if (.Platform$OS.type == "unix") {
     parallel::mclapply(X, FUN, ..., mc.cores = n_cores)
   } else {
-    lapply(X, FUN, ...)
+    cluster <- parallel::makeCluster(n_cores)
+    on.exit(parallel::stopCluster(cluster), add = TRUE)
+
+    parallel::clusterExport(
+      cluster,
+      varlist = c(
+        "is_timeout_event",
+        "margin_for_side",
+        "timeout_now_lookup",
+        "future_margin_lookup",
+        "prior_margin_lookup",
+        "timeout_in_window_lookup",
+        "keep_distinct_opportunities",
+        "build_timeout_opportunities_one_game"
+      ),
+      envir = .GlobalEnv
+    )
+
+    parallel::clusterEvalQ(cluster, {
+      library(tidyverse)
+      NULL
+    })
+
+    parallel::parLapply(
+      cl = cluster,
+      X = X,
+      fun = function(x, worker_fun, worker_args) {
+        do.call(worker_fun, c(list(x), worker_args))
+      },
+      worker_fun = FUN,
+      worker_args = list(...)
+    )
   }
 }
 
-select_episode_opportunities <- function(events, horizon_seconds = 180) {
+keep_distinct_opportunities <- function(events, horizon_seconds = 180) {
+  if (nrow(events) == 0) {
+    return(events)
+  }
+
   events %>%
-    arrange(focal_side, game_play_number) %>%
-    split(.$focal_side) %>%
+    arrange(focal_side, timeout_segment, game_play_number) %>%
+    split(interaction(.$focal_side, .$timeout_segment, drop = TRUE)) %>%
     map_dfr(function(team_events) {
       keep_rows <- integer()
-      next_allowed_seconds_remaining <- Inf
-      last_timeout_segment <- NA_integer_
+      last_kept_seconds_remaining <- Inf
 
       for (i in seq_len(nrow(team_events))) {
-        current_segment <- team_events$timeout_segment[i]
         current_seconds <- team_events$end_game_seconds_remaining[i]
-        same_timeout_segment <- !is.na(last_timeout_segment) &&
-          current_segment == last_timeout_segment
-        still_in_episode <- same_timeout_segment &&
-          current_seconds > next_allowed_seconds_remaining
 
-        if (!still_in_episode) {
+        if (current_seconds <= last_kept_seconds_remaining - horizon_seconds) {
           keep_rows <- c(keep_rows, i)
-          next_allowed_seconds_remaining <- current_seconds - horizon_seconds
-          last_timeout_segment <- current_segment
+          last_kept_seconds_remaining <- current_seconds
         }
       }
 
       team_events[keep_rows, , drop = FALSE]
-    })
+    }) %>%
+    arrange(game_play_number)
 }
 
 build_timeout_opportunities_one_game <- function(game_df,
@@ -142,8 +188,7 @@ build_timeout_opportunities_one_game <- function(game_df,
   game_df <- game_df %>%
     arrange(game_play_number) %>%
     mutate(
-      timeout_flag = str_detect(str_to_lower(coalesce(type_text, "")), "timeout") |
-        str_detect(str_to_lower(coalesce(text, "")), "timeout"),
+      timeout_flag = is_timeout_event(type_text, text),
       timeout_segment = cumsum(timeout_flag)
     )
 
@@ -158,11 +203,7 @@ build_timeout_opportunities_one_game <- function(game_df,
       focal_side = if_else(scoring_side == "home", "away", "home"),
       focal_team_id = if_else(focal_side == "home", home_team_id, away_team_id),
       home_focal = focal_side == "home",
-      current_margin = if_else(
-        focal_side == "home",
-        home_score - away_score,
-        away_score - home_score
-      ),
+      current_margin = margin_for_side(home_score, away_score, focal_side),
       raw_spread_focal = if_else(home_focal, home_team_spread, -home_team_spread),
       spread_missing = as.integer(is.na(raw_spread_focal)),
       pregame_spread_focal = replace_na(raw_spread_focal, 0),
@@ -174,7 +215,7 @@ build_timeout_opportunities_one_game <- function(game_df,
     return(tibble())
   }
 
-  scoring_events %>%
+  candidate_opportunities <- scoring_events %>%
     mutate(
       prior_margin_180 = pmap_dbl(
         list(game_play_number, start_window_seconds_remaining, focal_side),
@@ -229,9 +270,11 @@ build_timeout_opportunities_one_game <- function(game_df,
       !timeout_in_prior_180,
       swing_last_180 <= -swing_threshold,
       end_game_seconds_remaining >= horizon_seconds
-    ) %>%
-    select_episode_opportunities(horizon_seconds = horizon_seconds) %>%
-    select(
+    )
+
+  candidate_opportunities %>%
+    keep_distinct_opportunities(horizon_seconds = horizon_seconds) %>%
+    dplyr::select(
       season,
       game_id,
       game_play_number,
@@ -344,7 +387,21 @@ if (file.exists(pbp_cache_path) && !redownload_pbp) {
 } else {
   message("Downloading play-by-play for seasons ", min(seasons), ":", max(seasons))
   pbp <- hoopR::load_nba_pbp(seasons = seasons)
+  if (nrow(pbp) == 0) {
+    stop(
+      "load_nba_pbp() returned 0 rows. ",
+      "This usually means the download failed and hoopR fell through silently. ",
+      "Check your internet connection, then rerun with redownload_pbp <- TRUE."
+    )
+  }
   saveRDS(pbp, pbp_cache_path)
+}
+
+if (nrow(pbp) == 0) {
+  stop(
+    "The cached play-by-play object is empty. ",
+    "Delete ", pbp_cache_path, " and rerun, or refresh the cache with redownload_pbp <- TRUE."
+  )
 }
 
 # build one row per threshold-crossing timeout decision opportunity once, then cache it
@@ -360,6 +417,14 @@ if (file.exists(analysis_cache_path) && !rebuild_analysis_data) {
     n_cores = n_cores
   )
   saveRDS(analysis_data, analysis_cache_path)
+}
+
+if (nrow(analysis_data) == 0) {
+  stop(
+    "No timeout opportunities were constructed. ",
+    "For the default 2022:2026 seasons and a 7-point swing threshold, this should not be empty. ",
+    "Inspect the cached play-by-play and the opportunity filter in build_timeout_opportunities_one_game()."
+  )
 }
 
 # inspect the analysis dataset
