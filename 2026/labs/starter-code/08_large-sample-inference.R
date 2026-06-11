@@ -23,13 +23,14 @@ nba_players = read_delim(
 # Task 1:
 # - Modify the dataset to include:
 #   * Player
-#   * FT_total = total free throws made across the season
-#   * FTA_total = total free throws attempted across the season
+#   * FT_total = approximate total free throws made across the season
+#   * FTA_total = approximate total free throws attempted across the season
 #   * FT_percent = FT_total / FTA_total
-# - Remember that FT and FTA are per-game values, so convert them to totals using G
+# - Basketball Reference reports FT and FTA as per-game values in this table,
+#   so convert them to approximate totals using G before treating them as counts
 
 # Task 2:
-# - Filter the dataset to players with at least 25 total free-throw attempts
+# - Filter the dataset to players with at least 25 approximate total free-throw attempts
 # - Decide how you want to handle players with multiple team rows
 # - Make sure the final player-level dataset has one row per player-season
 
