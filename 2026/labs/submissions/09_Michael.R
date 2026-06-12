@@ -8,10 +8,11 @@ library(nnet)
 library(readr)
 library(splines)
 library(tidyverse)
+setwd("~/GitHub/lab-materials/2026/labs/data")
 
 # set seed
 set.seed(9)
-
+setwd("~/GitHub/lab-materials/2026/labs/data")
 ##############################
 ### PART 1: EXPECTED POINTS ###
 ##############################
@@ -29,10 +30,10 @@ score_values = sort(unique(nfl_data$pts_next_score))
 game_ids = unique(nfl_data$game_id)
 
 ep_formula = pts_next_score_factor ~
-  bs(yardline_100, df = 9) +
+  bs(yardline_100, df = 6) +
   factor(down) +
   log(ydstogo) +
-  bs(half_seconds_remaining)
+  bs(half_seconds_remaining, df = 5)
 
 target_state = tibble(
   yardline_100 = 35,
@@ -99,139 +100,175 @@ print(
 #   * cluster bootstrap
 #   * parametric bootstrap
 #   * residual bootstrap
-# - State your choice in comments
-# - Explain why it matches the dependence structure of this dataset
 
-# The grouping variable that matters here is:
-# game_id
+
+# A cluster bootstrap is certainly the way to go here. The Expected points vs yard line by down shows that the situation of plays before causes the play before to impact the next (they are not independent) in the different plays so we shoudl cluster by drives to account for this. 
 
 # Task 3:
-# - Implement your chosen bootstrap with at least B = 200 resamples
-# - For each resample:
-#   * create a bootstrap dataset
-#   * refit the EP model
-#   * recompute expected points at target_state
-
 B = 200
-
 bootstrap_ep = rep(NA_real_, B)
 
-# If you use a cluster bootstrap, you will likely want to:
-# - sample game_ids with replacement
-# - rebuild the bootstrap dataset by binding together all rows
-#   from each sampled game
-
 for (b in seq_len(B)) {
-  # TODO: sample games or rows, depending on your bootstrap choice.
-  # sampled_game_ids = sample(game_ids, size = length(game_ids), replace = TRUE)
-  
-  # TODO: build the bootstrap dataset.
-  # boot_data = ...
-  
-  # TODO: fit the model on boot_data.
-  # boot_model = multinom(ep_formula, data = boot_data, trace = FALSE)
-  
-  # TODO: predict class probabilities at target_state.
-  # boot_probs = predict(boot_model, newdata = target_state, type = "probs")
-  
-  # TODO: convert probabilities to expected points and store the result.
-  # bootstrap_ep[b] = expected_points_from_probs(boot_probs, score_values)
+  cat("Bootstrap iteration:", b, "of", B, "\n")
+  sampled_game_ids = sample(game_ids, size = length(game_ids), replace = TRUE)
+  boot_data = nfl_model_data |> filter(game_id %in% sampled_game_ids)
+  boot_model = multinom(ep_formula, data = boot_data, trace = FALSE)
+  boot_probs = predict(boot_model, newdata = target_state, type = "probs")
+  bootstrap_ep[b] = sum(boot_probs * score_values)
 }
-
 # Task 4:
-# - Store the bootstrap estimates in a vector
-# - Make a plot of the bootstrap distribution
 
-# Task 5:
-# - Compute:
-#   * the original fitted expected-points estimate
-#   * the bootstrap standard error
-#   * the 95% percentile interval
+bootstrap_ep_df = tibble(ep = bootstrap_ep)
+
+ggplot(bootstrap_ep_df, aes(x = ep)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  geom_vline(xintercept = ep_estimate, color = "red", linewidth = 1, linetype = "dashed") +
+  labs(
+    title = "Bootstrap Distribution of Expected Points",
+    subtitle = "Target: 1st-and-10 at opponent 35, 1800 seconds remaining",
+    x = "Expected Points",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+# Task 5
+boot_se = sd(bootstrap_ep, na.rm = TRUE)
+boot_ci = quantile(bootstrap_ep, probs = c(0.025, 0.975), na.rm = TRUE)
+
+cat("Original EP estimate:", ep_estimate, "\n")
+cat("Bootstrap SE:", boot_se, "\n")
+cat("95% Percentile Interval: [", boot_ci[1], ",", boot_ci[2], "]\n")
+
 
 # Task 6:
-# - In comments, explain why a naive row-by-row observation bootstrap
-#   is less appropriate for this dataset
+#> cat("Original EP estimate:", ep_estimate, "\n")
+#Original EP estimate: 3.835655 
+#> cat("Bootstrap SE:", boot_se, "\n")
+#Bootstrap SE: 0.1002185 
+#> cat("95% Percentile Interval: [", boot_ci[1], ",", boot_ci[2], "]\n")
+#95% Percentile Interval: [ 3.637398 , 4.022932 ]
 
+#The SE is 0.1 which narrow since we have over 700 games and its centered around an appropriate mean.
+
+library(readr)
 ################################
 ### PART 2: NBA FREE THROWS ####
 ################################
 
+# From Lab 8 - player level dataset
 nba_players = read_delim(
   "../data/09_nba-free-throws.csv",
   delim = ";",
   show_col_types = FALSE
 )
 
-# Task 1:
-# - Recreate the player-level free-throw dataset from Lab 8
-# - Include:
-#   * Player
-#   * FT_total = approximate total free throws made across the season
-#   * FTA_total = approximate total free throws attempted across the season
-#   * FT_percent
-# - Basketball Reference reports FT and FTA as per-game values in this table,
-#   so convert them to approximate totals using G before treating them as counts
-# - Filter to players with at least 25 approximate total free-throw attempts
+ft = nba_players %>%
+  group_by(Player) %>%
+  summarize(
+    FT_total  = sum(FT  * G),
+    FTA_total = sum(FTA * G),
+    .groups = "drop"
+  ) %>%
+  mutate(FT_percent = FT_total / FTA_total) %>%
+  filter(FTA_total >= 25)
 
-nba_free_throws = nba_players |>
+z = qnorm(0.975)
+
+ft = ft %>%
   mutate(
-    FT_total = round(FT * G),
-    FTA_total = round(FTA * G),
-    FT_percent = FT_total / FTA_total
+    wald_lo = FT_percent - z * sqrt(FT_percent * (1 - FT_percent) / FTA_total),
+    wald_hi = FT_percent + z * sqrt(FT_percent * (1 - FT_percent) / FTA_total),
+    n_tilde = FTA_total + z^2,
+    p_tilde = (FT_total + z^2 / 2) / n_tilde,
+    ac_lo   = p_tilde - z * sqrt(p_tilde * (1 - p_tilde) / n_tilde),
+    ac_hi   = p_tilde + z * sqrt(p_tilde * (1 - p_tilde) / n_tilde)
   )
 
-# TODO: decide how to handle multi-team players.
-# Option 1: keep only rows where Tm == "TOT" for players who changed teams.
-# Option 2: aggregate team rows yourself.
-#
-# nba_player_level = nba_free_throws |>
-#     ... |>
-#     filter(FTA_total >= 25)
-
-# Task 2:
-# - For each player, construct a 95% bootstrap confidence interval
-#   for free-throw percentage
-# - Overlay the bootstrap intervals on your Lab 8 player plot
-# - Compare bootstrap, Wald, and Agresti-Coull intervals
-
-# You may want helper functions for:
-# - one bootstrap resample of a player's free throws
-# - a percentile interval from bootstrap draws
-
+# Task 1 & 2: bootstrap CI per player, overlaid on plot
 bootstrap_ft_percent = function(ft_made, ft_attempted, B = 1000) {
-  # TODO: create B bootstrap resamples for one player.
-  # Hint: represent the season as a vector with ft_made ones and
-  # ft_attempted - ft_made zeros, then sample with replacement.
+  shots = c(rep(1, ft_made), rep(0, ft_attempted - ft_made))
+  replicate(B, mean(sample(shots, size = ft_attempted, replace = TRUE)))
 }
 
 percentile_interval = function(bootstrap_draws, level = 0.95) {
   alpha = 1 - level
-  quantile(
-    bootstrap_draws,
-    probs = c(alpha / 2, 1 - alpha / 2),
-    na.rm = TRUE
-  )
+  quantile(bootstrap_draws, probs = c(alpha / 2, 1 - alpha / 2), na.rm = TRUE)
 }
 
-# Task 3:
-# - Revisit the Lab 8 simulation study
-# - Add bootstrap confidence intervals to the same coverage framework
-# - Plot bootstrap coverage probability against p
-# - Compare to Wald and Agresti-Coull
+ft_boot = ft %>%
+  rowwise() %>%
+  mutate(
+    boot_draws = list(bootstrap_ft_percent(FT_total, FTA_total)),
+    boot_lo = percentile_interval(boot_draws)[1],
+    boot_hi = percentile_interval(boot_draws)[2]
+  ) %>%
+  ungroup()
 
-# Useful objects from Lab 8:
-sample_sizes = c(10, 50, 100, 250, 500, 1000)
-p_grid = seq(0, 1, length.out = 1000)
-M = 100
+ggplot(ft_boot %>% slice(1:30), aes(y = reorder(Player, FT_percent))) +
+  geom_point(aes(x = FT_percent)) +
+  geom_errorbar(aes(xmin = wald_lo, xmax = wald_hi, color = "Wald"),
+                width = 0.3, orientation = "y") +
+  geom_errorbar(aes(xmin = ac_lo, xmax = ac_hi, color = "Agresti-Coull"),
+                width = 0.3, orientation = "y") +
+  geom_errorbar(aes(xmin = boot_lo, xmax = boot_hi, color = "Bootstrap"),
+                width = 0.3, orientation = "y") +
+  labs(x = "FT%", y = "Player", color = "Method") +
+  theme_minimal()
+
+# Task 3 & 4: simulation study with bootstrap coverage
 z_975 = qnorm(0.975)
+p_grid = seq(0, 1, length.out = 1000)
+sample_sizes = c(10, 50, 100, 250, 500, 1000)
+M = 100
 
-bootstrap_coverage = tibble()
+results = map_dfr(sample_sizes, function(n) {
+  cat("Running n =", n, "\n")
+  map_dfr(p_grid, function(p) {
+    wald_cover = numeric(M)
+    ac_cover   = numeric(M)
+    boot_cover = numeric(M)
+    
+    for (m in 1:M) {
+      s = rbinom(1, n, p)
+      p_hat = s / n
+      
+      # Wald
+      wald_lo = p_hat - z_975 * sqrt(p_hat * (1 - p_hat) / n)
+      wald_hi = p_hat + z_975 * sqrt(p_hat * (1 - p_hat) / n)
+      wald_cover[m] = (p >= wald_lo & p <= wald_hi)
+      
+      # Agresti-Coull
+      n_tilde = n + z_975^2
+      p_tilde = (s + z_975^2 / 2) / n_tilde
+      ac_lo   = p_tilde - z_975 * sqrt(p_tilde * (1 - p_tilde) / n_tilde)
+      ac_hi   = p_tilde + z_975 * sqrt(p_tilde * (1 - p_tilde) / n_tilde)
+      ac_cover[m] = (p >= ac_lo & p <= ac_hi)
+      
+      # Bootstrap
+      shots = c(rep(1, s), rep(0, n - s))
+      boot_draws = replicate(200, mean(sample(shots, size = n, replace = TRUE)))
+      boot_lo = quantile(boot_draws, 0.025)
+      boot_hi = quantile(boot_draws, 0.975)
+      boot_cover[m] = (p >= boot_lo & p <= boot_hi)
+    }
+    
+    tibble(n = n, p = p, wald_cov = mean(wald_cover), 
+           ac_cov = mean(ac_cover), boot_cov = mean(boot_cover))
+  })
+})
 
-# TODO: extend your Lab 8 simulation loop.
-# For each simulated Binomial(n, p) count, compute:
-# - Wald interval
-# - Agresti-Coull interval
-# - bootstrap percentile interval
-# Then summarize coverage by method, n, and p.
+results_long = results %>%
+  pivot_longer(cols = c(wald_cov, ac_cov, boot_cov),
+               names_to  = "method",
+               values_to = "coverage") %>%
+  mutate(method = recode(method, wald_cov = "Wald", 
+                         ac_cov = "Agresti-Coull", 
+                         boot_cov = "Bootstrap"))
 
-q
+ggplot(results_long, aes(x = p, y = coverage, color = method)) +
+  geom_line(alpha = 0.7) +
+  geom_hline(yintercept = 0.95, linetype = "dashed") +
+  facet_wrap(~ n, labeller = label_both) +
+  labs(x = "p", y = "Coverage Probability", color = "Method") +
+  theme_minimal()
+
